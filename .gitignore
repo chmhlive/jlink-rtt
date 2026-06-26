@@ -1,0 +1,5 @@
+/target
+
+# Local project environments and temporary logs
+.jlink-rtt.env
+*.log
