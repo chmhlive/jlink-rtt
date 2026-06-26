@@ -81,18 +81,6 @@ fn handle_search_device(pattern: &str, project_root: &std::path::Path) {
 
 fn get_current_exe_name() -> String {
     std::env::args().next()
-        .and_then(|path| {
-            std::path::Path::new(&path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| {
-                    if cfg!(target_os = "windows") {
-                        format!(r".\{}", s)
-                    } else {
-                        format!("./{}", s)
-                    }
-                })
-        })
         .unwrap_or_else(|| {
             if cfg!(target_os = "windows") {
                 r".\jlink-rtt.exe".to_string()
@@ -182,8 +170,9 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
     config.config_file = Some(config_path.clone());
     println!("[INFO] Created config: {}", config_path.display());
     println!("[INFO] Config created. Now run the capture command again:");
-    let default_out = if cfg!(target_os = "windows") { "rtt.log" } else { "/tmp/rtt.log" };
-    println!("[INFO]   {} --out {}", exe_name, default_out);
+    let temp_dir = config::get_project_temp_dir(&config.project_root);
+    let default_out = temp_dir.join("rtt.log");
+    println!("[INFO]   {} --out {}", exe_name, default_out.display());
 
     print_config(&config);
     std::process::exit(0);

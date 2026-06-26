@@ -172,8 +172,8 @@ impl Orchestrator {
         ];
 
         if let Some(ref serial) = config.jlink_serial {
-            args.push("-select".to_string());
-            args.push(format!("USB={}", serial));
+            args.push("-SelectEmuBySN".to_string());
+            args.push(serial.clone());
         }
 
         eprintln!("[INFO] Resetting and resuming target through J-Link Commander.");
