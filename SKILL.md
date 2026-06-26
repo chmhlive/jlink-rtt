@@ -11,11 +11,18 @@ description: Read SEGGER J-Link RTT logs with RTT project config, reset/attach m
 
 Use the compiled `jlink-rtt` binary (or `jlink-rtt.exe` on Windows). Do not rewrite JLinkGDBServer/JLinkExe/TCP socket orchestration.
 
-Always run from the target project root. Three modes:
+Always run from the target project root. Define variables based on your OS:
 
 ```bash
-JLINK_RTT_BIN="./jlink-rtt" # Or ".\jlink-rtt.exe" on Windows
-RTT_LOG="/tmp/\$(basename "\$PWD")_rtt.log"
+# Linux/WSL (Bash)
+JLINK_RTT_BIN="<loaded-skill-base>/scripts/jlink-rtt"
+PROJECT_TEMP_DIR="$(dirname "$("${JLINK_RTT_BIN}" --print-config | grep LOG_FILE | cut -d'=' -f2)")"
+RTT_LOG="${PROJECT_TEMP_DIR}/rtt.log"
+
+# Windows (PowerShell)
+JLINK_RTT_BIN="<loaded-skill-base>\scripts\jlink-rtt.exe"
+$PROJECT_TEMP_DIR = Split-Path -Parent (& $JLINK_RTT_BIN --print-config | Select-String "LOG_FILE=" | % { $_.Line.Split("=")[1] })
+$RTT_LOG = Join-Path $PROJECT_TEMP_DIR "rtt.log"
 ```
 
 **Timed capture** — exit when a specific pattern appears in RTT output, or timeout after N seconds:
