@@ -471,7 +471,7 @@ log_info "Test 12: Stop command on idle session fails..."
 pkill -f "JLinkGDBServer.*-port 32331.*-RTTTelnetPort 39021" 2>/dev/null || true
 
 # Test PID file cleanup
-project_temp_dir="$(find /tmp -maxdepth 1 -type d -name "jlink-rtt-project-*" | head -n 1)"
+project_temp_dir="$(ls -td /tmp/jlink-rtt-project-* 2>/dev/null | head -n 1)"
 if [[ -n "${project_temp_dir}" ]]; then
     touch "${project_temp_dir}/jlink_rtt.pid"
 fi
