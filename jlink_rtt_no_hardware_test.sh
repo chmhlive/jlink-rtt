@@ -212,16 +212,16 @@ exit 0
 JLEOF
 chmod +x "${TMP_DIR}/bin/JLinkExe"
 
-cat > "${TMP_DIR}/project/.jlink-rtt.env" <<EOF
-DEVICE=NRF52840_XXAA
+cat > "${TMP_DIR}/project/.prj.env" <<EOF
+JLINK_DEVICE=NRF52840_XXAA
 JLINK_IF=SWD
-SPEED=4000
-HOST=127.0.0.1
+JLINK_SPEED=4000
+LISTEN_HOST=127.0.0.1
 GDB_PORT=32331
 RTT_PORT=39021
 RTT_READY_TIMEOUT=2
-LOG_FILE=${TMP_DIR}/jlink.log
-GDB_LOG_FILE=${TMP_DIR}/gdb.log
+JLINK_LOG_FILE=${TMP_DIR}/jlink.log
+JLINK_GDB_LOG_FILE=${TMP_DIR}/gdb.log
 EOF
 
 OUTPUT_FILE="${TMP_DIR}/rtt_output.log"
@@ -275,7 +275,7 @@ PRINT_CONFIG="${TMP_DIR}/print_config.log"
     cd "${TMP_DIR}/project/subdir"
     JLINK_RTT_TEST_TMP="${TMP_DIR}" \
     PATH="${TMP_DIR}/bin:${PATH}" \
-    DEVICE=ENV_DEVICE \
+    JLINK_DEVICE=ENV_DEVICE \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
         --print-config \
@@ -283,32 +283,32 @@ PRINT_CONFIG="${TMP_DIR}/print_config.log"
         > "${PRINT_CONFIG}" 2>&1
 )
 
-grep -Fq 'CONFIG_FILE='"${TMP_DIR}"'/project/.jlink-rtt.env' "${PRINT_CONFIG}" || fail "Config file was not discovered within project root."
-grep -Fq 'DEVICE=CLI_DEVICE' "${PRINT_CONFIG}" || fail "Command line did not override config."
+grep -Fq 'CONFIG_FILE='"${TMP_DIR}"'/project/.prj.env' "${PRINT_CONFIG}" || fail "Config file was not discovered within project root."
+grep -Fq 'JLINK_DEVICE=CLI_DEVICE' "${PRINT_CONFIG}" || fail "Command line did not override config."
 
-# DEVICE=ENV_DEVICE is intentional: RTT settings must not be overridden by env vars.
+# JLINK_DEVICE=ENV_DEVICE is intentional: RTT settings must not be overridden by env vars.
 log_info "Test 4: Ignore environmental variables override..."
 ENV_IGNORED="${TMP_DIR}/env_ignored.log"
 (
     cd "${TMP_DIR}/project/subdir"
     PATH="${TMP_DIR}/bin:${PATH}" \
-    DEVICE=ENV_DEVICE \
+    JLINK_DEVICE=ENV_DEVICE \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
         --print-config \
         > "${ENV_IGNORED}" 2>&1
 )
 
-grep -Fq 'DEVICE=NRF52840_XXAA' "${ENV_IGNORED}" || fail "Config DEVICE was not used."
-if grep -Fq 'DEVICE=ENV_DEVICE' "${ENV_IGNORED}"; then
-    fail "Environment DEVICE unexpectedly overrode config."
+grep -Fq 'JLINK_DEVICE=NRF52840_XXAA' "${ENV_IGNORED}" || fail "Config JLINK_DEVICE was not used."
+if grep -Fq 'JLINK_DEVICE=ENV_DEVICE' "${ENV_IGNORED}"; then
+    fail "Environment JLINK_DEVICE unexpectedly overrode config."
 fi
 
 # Non-git directories only check the current directory unless --project-root is explicit.
 log_info "Test 5: Scope limit config discovery..."
 mkdir -p "${TMP_DIR}/outside/subdir"
-cat > "${TMP_DIR}/outside/.jlink-rtt.env" <<EOF
-DEVICE=SHOULD_NOT_LOAD
+cat > "${TMP_DIR}/outside/.prj.env" <<EOF
+JLINK_DEVICE=SHOULD_NOT_LOAD
 EOF
 
 NO_CONFIG="${TMP_DIR}/no_config.log"
@@ -318,7 +318,7 @@ NO_CONFIG="${TMP_DIR}/no_config.log"
     "${BINARY_PATH}" --print-config > "${NO_CONFIG}" 2>&1
 )
 
-if grep -Fq 'DEVICE=SHOULD_NOT_LOAD' "${NO_CONFIG}"; then
+if grep -Fq 'JLINK_DEVICE=SHOULD_NOT_LOAD' "${NO_CONFIG}"; then
     fail "Non-git search escaped current directory without an explicit project root."
 fi
 
@@ -326,7 +326,7 @@ fi
 log_info "Test 6: Init configuration file mode..."
 INIT_DIR="${TMP_DIR}/init_project"
 mkdir -p "${INIT_DIR}"
-INIT_CONFIG="${INIT_DIR}/.jlink-rtt.env"
+INIT_CONFIG="${INIT_DIR}/.prj.env"
 INIT_OUT="${TMP_DIR}/init_output.log"
 
 (
@@ -339,10 +339,36 @@ INIT_OUT="${TMP_DIR}/init_output.log"
         > "${INIT_OUT}" 2>&1
 )
 
-grep -Fq 'DEVICE=nRF52840_xxAA' "${INIT_CONFIG}" || fail "--init did not write DEVICE."
+grep -Fq 'JLINK_DEVICE=nRF52840_xxAA' "${INIT_CONFIG}" || fail "--init did not write JLINK_DEVICE."
 grep -Fq 'JLINK_IF=SWD' "${INIT_CONFIG}" || fail "--init did not write JLINK_IF."
-grep -Fq 'SPEED=4000' "${INIT_CONFIG}" || fail "--init did not write SPEED."
+grep -Fq 'JLINK_SPEED=4000' "${INIT_CONFIG}" || fail "--init did not write JLINK_SPEED."
+grep -Fq '# --- J-Link RTT 调试配置 ---' "${INIT_CONFIG}" || fail "--init did not write Chinese comment header."
 grep -Fq 'Created config:' "${INIT_OUT}" || fail "--init did not print config created message."
+
+# --- --init append mode ---
+log_info "Test 6b: Init append configuration to existing .prj.env..."
+APPEND_DIR="${TMP_DIR}/append_project"
+mkdir -p "${APPEND_DIR}"
+APPEND_CONFIG="${APPEND_DIR}/.prj.env"
+cat > "${APPEND_CONFIG}" <<EOF
+BOARD_TARGET="mr01/nrf52840"
+NCS_VERSION="v3.4.0"
+EOF
+APPEND_OUT="${TMP_DIR}/append_output.log"
+
+(
+    cd "${APPEND_DIR}"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${APPEND_DIR}" \
+        --init \
+        --device NRF52840_XXAA \
+        > "${APPEND_OUT}" 2>&1
+)
+
+grep -Fq 'BOARD_TARGET="mr01/nrf52840"' "${APPEND_CONFIG}" || fail "Existing BOARD_TARGET was overwritten."
+grep -Fq 'JLINK_DEVICE=nRF52840_xxAA' "${APPEND_CONFIG}" || fail "Appended config did not write JLINK_DEVICE."
+grep -Fq 'Appended config to:' "${APPEND_OUT}" || fail "--init did not print appended message."
 
 # --- no-config message ---
 log_info "Test 7: Informative guide on no config file..."
@@ -358,7 +384,7 @@ NO_CFG_OUT="${TMP_DIR}/no_config_output.log"
         > "${NO_CFG_OUT}" 2>&1
 )
 
-grep -Fq 'No .jlink-rtt.env found' "${NO_CFG_OUT}" || fail "No-config did not print missing config message."
+grep -Fq 'No .prj.env found' "${NO_CFG_OUT}" || fail "No-config did not print missing config message."
 grep -Fq 'Scan the project for the DEVICE name' "${NO_CFG_OUT}" || fail "No-config did not print scan-project hint."
 grep -Fq -- '--init --device' "${NO_CFG_OUT}" || fail "No-config did not print --init command hint."
 

@@ -18,12 +18,12 @@ Always run from the target project root. Define OS-dependent variables and choos
 ```bash
 # Linux/WSL (Bash)
 JLINK_RTT_BIN="<loaded-skill-base>/scripts/jlink-rtt"
-PROJECT_TEMP_DIR="$(dirname "$("${JLINK_RTT_BIN}" --print-config | grep "^LOG_FILE=" | cut -d'=' -f2)")"
+PROJECT_TEMP_DIR="$(dirname "$("${JLINK_RTT_BIN}" --print-config | grep "^JLINK_LOG_FILE=" | cut -d'=' -f2)")"
 RTT_LOG="${PROJECT_TEMP_DIR}/rtt.log"
 
 # Windows (PowerShell)
 JLINK_RTT_BIN="<loaded-skill-base>\scripts\jlink-rtt.exe"
-$PROJECT_TEMP_DIR = Split-Path -Parent (& $JLINK_RTT_BIN --print-config | Select-String "LOG_FILE=" | % { $_.Line.Split("=")[1] })
+$PROJECT_TEMP_DIR = Split-Path -Parent (& $JLINK_RTT_BIN --print-config | Select-String "JLINK_LOG_FILE=" | % { $_.Line.Split("=")[1] })
 $RTT_LOG = Join-Path $PROJECT_TEMP_DIR "rtt.log"
 ```
 
@@ -66,7 +66,7 @@ echo "log=\${RTT_LOG}"
 
 The tool handles all pre-flight checks internally. Its output is self-contained: every `[ERROR]` line is followed by `[INFO]` lines describing what to do next — follow them directly, no lookup or translation needed.
 
-- **Do not read project files, check for `.jlink-rtt.env`, or run `lsusb` before running the tool.** Just run it and respond to the output.
+- **Do not read project files, check for `.prj.env`, or run `lsusb` before running the tool.** Just run it and respond to the output.
 - Use the loaded skill base path directly; do not list the scripts directory to verify it or guess another install path.
 - When the tool exits 0 with `[INFO]` instructions (e.g. no config found), follow the instructions: scan the project for the requested value, ask the user if not found, then run the command it prints.
 - When the tool exits non-zero, read the `[ERROR]` + `[INFO]` lines and relay them to the user as the next action.

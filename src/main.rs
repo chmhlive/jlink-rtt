@@ -26,14 +26,14 @@ fn print_config(config: &AppConfig) {
     if let Some(ref nc) = config.nc {
         println!("NC={}", nc);
     }
-    println!("HOST={}", config.host);
+    println!("LISTEN_HOST={}", config.host);
     if let Some(ref dev) = config.device {
-        println!("DEVICE={}", dev);
+        println!("JLINK_DEVICE={}", dev);
     } else {
-        println!("DEVICE=");
+        println!("JLINK_DEVICE=");
     }
     println!("JLINK_IF={}", config.jlink_if);
-    println!("SPEED={}", config.speed);
+    println!("JLINK_SPEED={}", config.speed);
     if let Some(ref serial) = config.jlink_serial {
         println!("JLINK_SERIAL={}", serial);
     } else {
@@ -42,8 +42,8 @@ fn print_config(config: &AppConfig) {
     println!("GDB_PORT={}", config.gdb_port);
     println!("RTT_PORT={}", config.rtt_port);
     println!("RTT_READY_TIMEOUT={}", config.ready_timeout);
-    println!("LOG_FILE={}", config.log_file);
-    println!("GDB_LOG_FILE={}", config.gdb_log_file);
+    println!("JLINK_LOG_FILE={}", config.log_file);
+    println!("JLINK_GDB_LOG_FILE={}", config.gdb_log_file);
     if let Some(ref out) = config.rtt_out_file {
         println!("RTT_OUT_FILE={}", out);
     } else {
@@ -116,16 +116,8 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
     // Determine target config path
     let config_path = match explicit_config_path {
         Some(path) => PathBuf::from(path),
-        None => config.project_root.join(".jlink-rtt.env"),
+        None => config.project_root.join(".prj.env"),
     };
-
-    if config_path.is_file() {
-        eprintln!("[ERROR] Config file already exists: {}", config_path.display());
-        eprintln!("[INFO] To inspect it, run:");
-        eprintln!("[INFO]   {} --print-config", exe_name);
-        eprintln!("[INFO] To re-create, remove the file first: rm {}", config_path.display());
-        std::process::exit(1);
-    }
 
     // Auto-detect J-Link serial if not explicitly set
     if config.jlink_serial.is_none() {
@@ -135,18 +127,44 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
         }
     }
 
-    // Prepare config file contents
-    let mut content = format!(
-        "# J-Link RTT project configuration\n\
-         DEVICE={}\n\
-         JLINK_IF={}\n\
-         SPEED={}\n\
-         HOST={}\n\
-         GDB_PORT={}\n\
-         RTT_PORT={}\n\
-         RTT_READY_TIMEOUT={}\n\
-         LOG_FILE={}\n\
-         GDB_LOG_FILE={}\n",
+    // Check if config file exists and already has JLINK_DEVICE
+    if config_path.is_file() {
+        if let Ok(existing_content) = fs::read_to_string(&config_path) {
+            let has_jlink_device = existing_content.lines().any(|l| {
+                let trimmed = l.trim();
+                trimmed.starts_with("JLINK_DEVICE=") || trimmed.starts_with("DEVICE=")
+            });
+            if has_jlink_device {
+                eprintln!("[ERROR] Config file already exists: {}", config_path.display());
+                eprintln!("[INFO] To inspect it, run:");
+                eprintln!("[INFO]   {} --print-config", exe_name);
+                eprintln!("[INFO] To re-create, remove the file first: rm {}", config_path.display());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Prepare RTT config block with Chinese comments
+    let mut block = format!(
+        "\n# --- J-Link RTT 调试配置 ---\n\n\
+         # J-Link 调试目标芯片型号\n\
+         JLINK_DEVICE={}\n\n\
+         # J-Link 调试通信接口 (例如: SWD, JTAG)\n\
+         JLINK_IF={}\n\n\
+         # J-Link 通信速率 (单位: kHz)\n\
+         JLINK_SPEED={}\n\n\
+         # GDB Server 与 RTT 服务监听的主机地址\n\
+         LISTEN_HOST={}\n\n\
+         # GDB Server 调试服务端口\n\
+         GDB_PORT={}\n\n\
+         # RTT Telnet 日志传输端口\n\
+         RTT_PORT={}\n\n\
+         # RTT 服务端口就绪等待超时时间 (单位: 秒)\n\
+         RTT_READY_TIMEOUT={}\n\n\
+         # JLinkGDBServer 运行日志保存文件路径\n\
+         JLINK_LOG_FILE={}\n\n\
+         # J-Link Commander 复位与连接日志保存文件路径\n\
+         JLINK_GDB_LOG_FILE={}\n",
         resolved_device,
         config.jlink_if,
         config.speed,
@@ -159,16 +177,33 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
     );
 
     if let Some(ref serial) = config.jlink_serial {
-        content.push_str(&format!("JLINK_SERIAL={}\n", serial));
+        block.push_str(&format!("\n# 目标的 SEGGER J-Link 调试器硬件序列号 (SN)\nJLINK_SERIAL={}\n", serial));
     }
 
-    if let Err(e) = fs::write(&config_path, content) {
-        eprintln!("[ERROR] Failed to write config file: {}", e);
-        std::process::exit(1);
+    if config_path.is_file() {
+        use std::io::Write;
+        let mut file = match fs::OpenOptions::new().append(true).open(&config_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[ERROR] Failed to open config file for appending: {}", e);
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = file.write_all(block.as_bytes()) {
+            eprintln!("[ERROR] Failed to append config to file: {}", e);
+            std::process::exit(1);
+        }
+        println!("[INFO] Appended config to: {}", config_path.display());
+    } else {
+        let content = block.trim_start_matches('\n').to_string();
+        if let Err(e) = fs::write(&config_path, content) {
+            eprintln!("[ERROR] Failed to write config file: {}", e);
+            std::process::exit(1);
+        }
+        println!("[INFO] Created config: {}", config_path.display());
     }
 
     config.config_file = Some(config_path.clone());
-    println!("[INFO] Created config: {}", config_path.display());
     println!("[INFO] Config created. Now run the capture command again:");
     let temp_dir = config::get_project_temp_dir(&config.project_root);
     let default_out = temp_dir.join("rtt.log");
@@ -284,7 +319,7 @@ async fn main() {
     // Normal capture mode check: if DEVICE is missing
     if config.device.is_none() {
         let exe_name = get_current_exe_name();
-        println!("[INFO] No .jlink-rtt.env found and no --device given.");
+        println!("[INFO] No .prj.env found and no --device given.");
         println!("[INFO] Scan the project for the DEVICE name (e.g. NRF52840_XXAA).");
         println!("[INFO] Use --search-device to confirm the exact name:");
         println!("[INFO]   {} --search-device <pattern>", exe_name);

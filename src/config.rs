@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about = "J-Link RTT Rust Orchestrator", long_about = None)]
 pub struct CliArgs {
-    #[arg(long, help = "Load explicit .jlink-rtt.env file")]
+    #[arg(long, help = "Load explicit .prj.env file")]
     pub config: Option<String>,
 
     #[arg(long, help = "Limit default config search to this project root")]
@@ -17,7 +17,7 @@ pub struct CliArgs {
     #[arg(long, help = "Print resolved config and exit")]
     pub print_config: bool,
 
-    #[arg(long, help = "Create .jlink-rtt.env with current settings and exit")]
+    #[arg(long, help = "Create .prj.env with current settings and exit")]
     pub init: bool,
 
     #[arg(long, help = "Override auto-detected JLinkGDBServer command")]
@@ -202,10 +202,10 @@ impl AppConfig {
         let gdb = args.gdb.or_else(|| config_map.get("GDB").cloned());
         let nc = args.nc.or_else(|| config_map.get("NC").cloned());
 
-        let host = get_val("HOST", args.host, "127.0.0.1");
-        let device = get_opt_val("DEVICE", args.device);
+        let host = get_val("LISTEN_HOST", args.host, "127.0.0.1");
+        let device = get_opt_val("JLINK_DEVICE", args.device);
         let jlink_if = get_val("JLINK_IF", args.r#if, "SWD");
-        let speed = get_val("SPEED", args.speed, "4000");
+        let speed = get_val("JLINK_SPEED", args.speed, "4000");
         let jlink_serial = get_opt_val("JLINK_SERIAL", args.serial);
         let gdb_port = get_val("GDB_PORT", args.gdb_port, "2331");
         let rtt_port = get_val("RTT_PORT", args.rtt_port, "19021");
@@ -215,8 +215,8 @@ impl AppConfig {
         let default_log = temp_dir.join("jlink_gdb_server.log").to_string_lossy().to_string();
         let default_gdb_log = temp_dir.join("jlink_gdb_resume.log").to_string_lossy().to_string();
         
-        let log_file = get_val("LOG_FILE", args.log, &default_log);
-        let gdb_log_file = get_val("GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
+        let log_file = get_val("JLINK_LOG_FILE", args.log, &default_log);
+        let gdb_log_file = get_val("JLINK_GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
         
         let rtt_out_file = get_opt_val("RTT_OUT_FILE", args.out);
         let rtt_match_pattern = get_opt_val("RTT_MATCH_PATTERN", args.r#match);
@@ -301,7 +301,7 @@ impl AppConfig {
             let path = PathBuf::from(path_str);
             if !path.is_file() {
                 return Err(format!(
-                    "[ERROR] Config file not found: {}.\n[INFO] Check the --config path, or run without --config to auto-discover .jlink-rtt.env.",
+                    "[ERROR] Config file not found: {}.\n[INFO] Check the --config path, or run without --config to auto-discover .prj.env.",
                     path_str
                 ));
             }
@@ -367,7 +367,7 @@ impl AppConfig {
     fn find_default_config(cwd: &Path, project_root: &Path) -> Option<PathBuf> {
         let mut current = cwd.to_path_buf();
         loop {
-            let candidate = current.join(".jlink-rtt.env");
+            let candidate = current.join(".prj.env");
             if candidate.is_file() {
                 return Some(candidate);
             }

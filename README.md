@@ -28,7 +28,7 @@ From your target project directory:
 ```bash
 jlink-rtt --init --device nrf52840
 ```
-This generates a local `.jlink-rtt.env` file. Adjust the options inside as needed.
+This generates or appends RTT debug settings to `.prj.env`. Adjust the options inside as needed.
 
 ### 2. Capture Logs
 
