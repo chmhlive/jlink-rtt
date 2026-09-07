@@ -39,6 +39,14 @@ jlink-rtt --match "START HERE" --match-timeout 30
 # Stream output indefinitely
 jlink-rtt --out rtt.log
 
+# Send command to running RTT session via downlink (from another terminal or test script)
+jlink-rtt --send "help"                          # auto-appends \n, supports \n \r \t \\ \xHH
+jlink-rtt --send "status" --no-newline          # send without trailing \n
+jlink-rtt --send "0102030a" --hex               # hex bytes (supports 0102030a, 0x01 0x02, etc.)
+
+# Interactive mode: forward terminal input lines directly to RTT downlink
+jlink-rtt --out rtt.log -i
+
 # Stop a running session
 jlink-rtt --stop
 ```

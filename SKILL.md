@@ -43,6 +43,25 @@ echo "exit=$?"
 echo "log=${RTT_LOG}"
 ```
 
+**Send command to running session** — inject commands into RTT downlink channel from host test scripts or another shell (payload limit 1 MB):
+
+```bash
+# Text command (automatically appends \n, supports \n \r \t \\ \xHH escapes)
+"${JLINK_RTT_BIN}" --send "help"
+
+# Hex binary payload (supports 0102030a, 0x01 0x02, etc.)
+"${JLINK_RTT_BIN}" --send "0102030a" --hex
+
+# Raw without appending \n
+"${JLINK_RTT_BIN}" --send "status" --no-newline
+```
+
+**Interactive console** — forward keystrokes line-by-line directly to RTT downlink (raw text, escapes not parsed):
+
+```bash
+"${JLINK_RTT_BIN}" --out "${RTT_LOG}" -i
+```
+
 **Continuous stream** — no timeout, runs until stopped. Stop by running `--stop` from another shell:
 
 **Start (AI-Friendly & Non-blocking):**
@@ -70,7 +89,8 @@ The tool handles all pre-flight checks internally. Its output is self-contained:
 - Use the loaded skill base path directly; do not list the scripts directory to verify it or guess another install path.
 - When the tool exits 0 with `[INFO]` instructions (e.g. no config found), follow the instructions: scan the project for the requested value, ask the user if not found, then run the command it prints.
 - When the tool exits non-zero, read the `[ERROR]` + `[INFO]` lines and relay them to the user as the next action.
-- For all options: `\${JLINK_RTT_BIN} --help`
+- If `--send` reports "No running RTT session" when no session is active, delete stale `<tmp>/jlink-rtt-*/rtt_ctrl.port`.
+- For all options: `${JLINK_RTT_BIN} --help`
 
 ## Device Name Resolution
 

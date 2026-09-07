@@ -7,7 +7,7 @@ log_info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 log_info "Building jlink-rtt Rust binary in release mode..."
-cargo build --release
+cargo build --release --manifest-path "${SCRIPT_DIR}/Cargo.toml"
 
 BINARY_PATH="${SCRIPT_DIR}/target/release/jlink-rtt"
 TMP_DIR="$(mktemp -d)"
@@ -125,7 +125,19 @@ def listen_gdb(port):
 def handle_rtt_client(conn, data):
     try:
         conn.sendall(data)
-        time.sleep(5)
+        conn.settimeout(0.2)
+        downlink_file = os.environ.get("JLINK_RTT_TEST_TMP", "/tmp") + "/downlink_received.log"
+        start_t = time.time()
+        while time.time() - start_t < 5:
+            try:
+                chunk = conn.recv(1024)
+                if chunk:
+                    with open(downlink_file, "ab") as f:
+                        f.write(chunk)
+                else:
+                    break
+            except socket.timeout:
+                continue
         conn.close()
     except Exception:
         pass
@@ -516,6 +528,127 @@ grep -Fq 'No running RTT session' "${STOP_OUT}" || fail "--stop should report no
 
 if [[ -n "${project_temp_dir}" && -f "${project_temp_dir}/jlink_rtt.pid" ]]; then
     fail "--stop did not clean up stale PID file."
+fi
+
+# --- --send on idle session should exit 1 ---
+log_info "Test 13: Send command on idle session fails..."
+SEND_IDLE_OUT="${TMP_DIR}/send_idle.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --send "test_cmd" \
+        > "${SEND_IDLE_OUT}" 2>&1
+) && fail "--send on idle session should exit 1." || true
+
+grep -Fq 'No running RTT session found' "${SEND_IDLE_OUT}" || fail "--send did not report missing session."
+
+# --- --send injected into running session ---
+log_info "Test 14: Send command injected into running RTT session..."
+pkill -f "python3.*simulate_ports" 2>/dev/null || true
+pkill -f "JLinkGDBServer.*-port 32331.*-RTTTelnetPort 39021" 2>/dev/null || true
+rm -f "${TMP_DIR}/downlink_received.log"
+
+# Start jlink-rtt in background
+RTT_STREAM_LOG="${TMP_DIR}/rtt_stream.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    JLINK_RTT_TEST_TMP="${TMP_DIR}" \
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --no-reset \
+        --no-resume \
+        > "${RTT_STREAM_LOG}" 2>&1
+) &
+RTT_CLIENT_PID=$!
+
+# Wait for control port file to appear (up to 3s)
+project_temp_dir="$(ls -td /tmp/jlink-rtt-project-* 2>/dev/null | head -n 1)"
+for _ in $(seq 1 30); do
+    [[ -n "${project_temp_dir}" && -f "${project_temp_dir}/rtt_ctrl.port" ]] && break
+    sleep 0.1
+done
+[[ -n "${project_temp_dir}" && -f "${project_temp_dir}/rtt_ctrl.port" ]] || fail "rtt_ctrl.port was not created."
+
+# Send plain text command
+SEND_OUT="${TMP_DIR}/send_result.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --send "bms_test_charge" \
+        > "${SEND_OUT}" 2>&1
+) || fail "--send failed to inject command."
+
+grep -Fq 'Downlink command sent' "${SEND_OUT}" || fail "--send did not report success."
+
+# Send hex command
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --send "0102030a" \
+        --hex \
+        >> "${SEND_OUT}" 2>&1
+) || fail "--send --hex failed to inject command."
+
+# Send hex command with multiple 0x prefixes
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --send "0x0a 0x0b" \
+        --hex \
+        >> "${SEND_OUT}" 2>&1
+) || fail "--send --hex with 0x prefixes failed to inject command."
+
+# Stop session cleanly
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --stop \
+        > /dev/null 2>&1
+) || true
+
+wait "${RTT_CLIENT_PID}" 2>/dev/null || true
+
+# Verify downlink received data contains both commands
+grep -Fq 'bms_test_charge' "${TMP_DIR}/downlink_received.log" || fail "Downlink did not receive bms_test_charge."
+if ! od -An -tx1 "${TMP_DIR}/downlink_received.log" | grep -q '01 02 03 0a'; then
+    fail "Downlink did not receive hex sequence 01 02 03 0a."
+fi
+if ! od -An -tx1 "${TMP_DIR}/downlink_received.log" | grep -q '0a 0b'; then
+    fail "Downlink did not receive hex sequence 0a 0b."
+fi
+
+# --- Invalid --out path error handling & clean exit ---
+log_info "Test 15: Invalid --out path fails fast without leaking control port..."
+pkill -f "python3.*simulate_ports" 2>/dev/null || true
+pkill -f "JLinkGDBServer.*-port 32331" 2>/dev/null || true
+sleep 0.2
+INVALID_OUT_LOG="${TMP_DIR}/invalid_out.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    JLINK_RTT_TEST_TMP="${TMP_DIR}" \
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --out "/nonexistent_dir_cannot_create/rtt.log" \
+        --no-reset \
+        --no-resume \
+        > "${INVALID_OUT_LOG}" 2>&1
+) && fail "Invalid --out path should exit non-zero." || true
+
+grep -Fq 'Failed to open RTT output file' "${INVALID_OUT_LOG}" || fail "Did not report open file error."
+if [[ -n "${project_temp_dir}" && -f "${project_temp_dir}/rtt_ctrl.port" ]]; then
+    fail "rtt_ctrl.port leaked after failed --out opening."
 fi
 
 log_info "All jlink-rtt automated coverage tests passed successfully!"

@@ -11,6 +11,7 @@ use crate::preflight::DetectedTools;
 pub struct Orchestrator {
     gdb_server_child: Option<Child>,
     pid_file_path: PathBuf,
+    ctrl_port_path: PathBuf,
     log_file_path: PathBuf,
 }
 
@@ -18,9 +19,11 @@ impl Orchestrator {
     pub fn new(config: &AppConfig) -> Self {
         let temp_dir = crate::config::get_project_temp_dir(&config.project_root);
         let pid_file_path = temp_dir.join("jlink_rtt.pid");
+        let ctrl_port_path = temp_dir.join("rtt_ctrl.port");
         Self {
             gdb_server_child: None,
             pid_file_path,
+            ctrl_port_path,
             log_file_path: PathBuf::from(&config.log_file),
         }
     }
@@ -205,7 +208,28 @@ impl Orchestrator {
 
         Ok(())
     }
+}
 
+/// RAII guard ensuring background tasks are aborted and control port file is cleaned up on any exit path.
+struct TaskGuard {
+    writer: tokio::task::JoinHandle<()>,
+    ctrl: tokio::task::JoinHandle<()>,
+    stdin: Option<tokio::task::JoinHandle<()>>,
+    ctrl_port_path: PathBuf,
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.ctrl_port_path);
+        self.ctrl.abort();
+        if let Some(ref t) = self.stdin {
+            t.abort();
+        }
+        self.writer.abort();
+    }
+}
+
+impl Orchestrator {
     pub async fn run_rtt_capture(&self, config: &AppConfig) -> Result<(), String> {
         let addr_str = format!("{}:{}", config.host, config.rtt_port);
         let addr = match addr_str.to_socket_addrs() {
@@ -216,18 +240,7 @@ impl Orchestrator {
             Err(e) => return Err(format!("Invalid address {}: {}", addr_str, e)),
         };
 
-        if config.rtt_match_pattern.is_some() {
-            eprintln!("[INFO] Connecting to RTT telnet port {}; waiting for match: {}", addr_str, config.rtt_match_pattern.as_ref().unwrap());
-        } else {
-            eprintln!("[INFO] Connecting to RTT telnet port {}.", addr_str);
-            eprintln!("[INFO] Streaming until interrupted. To stop, send SIGINT (Ctrl+C or kill -INT <pid>).");
-        }
-
-        let mut tcp_stream = tokio::net::TcpStream::connect(&addr)
-            .await
-            .map_err(|e| format!("[ERROR] Failed to connect to RTT port {}: {}", addr_str, e))?;
-
-        // Open out file if set
+        // Open out file first if specified, failing fast before establishing network connections or background tasks
         let mut out_file = if let Some(ref path_str) = config.rtt_out_file {
             let f = tokio::fs::OpenOptions::new()
                 .create(true)
@@ -241,12 +254,102 @@ impl Orchestrator {
             None
         };
 
+        if config.rtt_match_pattern.is_some() {
+            eprintln!("[INFO] Connecting to RTT telnet port {}; waiting for match: {}", addr_str, config.rtt_match_pattern.as_ref().unwrap());
+        } else {
+            eprintln!("[INFO] Connecting to RTT telnet port {}.", addr_str);
+            eprintln!("[INFO] Streaming until interrupted. To stop, send SIGINT (Ctrl+C or kill -INT <pid>).");
+        }
+
+        let tcp_stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("[ERROR] Failed to connect to RTT port {}: {}", addr_str, e))?;
+
+        // Split TCP stream into read and write halves for bidirectional RTT communication
+        let (read_half, mut write_half) = tcp_stream.into_split();
+
+        // MPSC channel for downlink commands (from local control socket or stdin)
+        let (downlink_tx, mut downlink_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+
+        // Dedicated writer task for RTT downlink
+        let writer_task = tokio::spawn(async move {
+            while let Some(data) = downlink_rx.recv().await {
+                if let Err(e) = write_half.write_all(&data).await {
+                    eprintln!("[ERROR] Failed to write to RTT downlink: {}", e);
+                    break;
+                }
+                let _ = write_half.flush().await;
+            }
+        });
+
+        // Bind local control TCP listener on 127.0.0.1:0
+        let ctrl_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("[ERROR] Failed to bind local control port: {}", e))?;
+        let ctrl_port = ctrl_listener
+            .local_addr()
+            .map_err(|e| format!("[ERROR] Failed to get local control address: {}", e))?
+            .port();
+        let _ = fs::write(&self.ctrl_port_path, ctrl_port.to_string());
+
+        let ctrl_tx = downlink_tx.clone();
+        let ctrl_task = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = ctrl_listener.accept().await {
+                let tx = ctrl_tx.clone();
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 4];
+                    if socket.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let len = u32::from_be_bytes(len_buf) as usize;
+                    if len > 1024 * 1024 {
+                        let _ = socket.write_all(b"ERR payload too large\n").await;
+                        return;
+                    }
+                    let mut payload = vec![0u8; len];
+                    if socket.read_exact(&mut payload).await.is_err() {
+                        return;
+                    }
+                    if tx.send(payload).await.is_ok() {
+                        let _ = socket.write_all(format!("OK {}\n", len).as_bytes()).await;
+                    } else {
+                        let _ = socket.write_all(b"ERR downlink closed\n").await;
+                    }
+                });
+            }
+        });
+
+        // Stdin interactive task if --interactive (-i) is specified
+        let stdin_task = if config.interactive {
+            eprintln!("[INFO] Interactive stdin enabled. Type commands and press Enter to send via RTT downlink.");
+            let stdin_tx = downlink_tx.clone();
+            Some(tokio::spawn(async move {
+                let mut reader = BufReader::new(tokio::io::stdin()).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let mut bytes = line.into_bytes();
+                    bytes.push(b'\n');
+                    if stdin_tx.send(bytes).await.is_err() {
+                        break;
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let _task_guard = TaskGuard {
+            writer: writer_task,
+            ctrl: ctrl_task,
+            stdin: stdin_task,
+            ctrl_port_path: self.ctrl_port_path.clone(),
+        };
+
         let has_pattern = config.rtt_match_pattern.is_some();
         let match_timeout_secs = config.rtt_match_timeout.parse::<u64>().unwrap_or(30);
 
-        if has_pattern {
+        let result = if has_pattern {
             let pattern = config.rtt_match_pattern.as_ref().unwrap().clone();
-            let mut reader = BufReader::new(tcp_stream);
+            let mut reader = BufReader::new(read_half);
             let mut line = String::new();
 
             let read_future = async {
@@ -297,9 +400,10 @@ impl Orchestrator {
             }
         } else {
             // Streaming mode: read in blocks and write directly
+            let mut reader = read_half;
             let mut buf = [0u8; 1024];
             loop {
-                let bytes = tcp_stream.read(&mut buf).await
+                let bytes = reader.read(&mut buf).await
                     .map_err(|e| format!("Error reading from RTT: {}", e))?;
                 if bytes == 0 {
                     break;
@@ -316,7 +420,9 @@ impl Orchestrator {
                 }
             }
             Ok(())
-        }
+        };
+
+        result
     }
 }
 
@@ -327,5 +433,6 @@ impl Drop for Orchestrator {
             let _ = child.start_kill();
         }
         let _ = fs::remove_file(&self.pid_file_path);
+        let _ = fs::remove_file(&self.ctrl_port_path);
     }
 }

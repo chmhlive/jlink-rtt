@@ -77,6 +77,18 @@ pub struct CliArgs {
     #[arg(long, help = "Stop a running RTT session (kills JLinkGDBServer, triggers clean shutdown")]
     pub stop: bool,
 
+    #[arg(long, value_name = "COMMAND", help = "Send a command to a running RTT session downlink and exit")]
+    pub send: Option<String>,
+
+    #[arg(long, help = "Treat --send COMMAND as a hex string (e.g. '0102030a')")]
+    pub hex: bool,
+
+    #[arg(long, help = "Do not append newline when sending with --send")]
+    pub no_newline: bool,
+
+    #[arg(short, long, help = "Enable interactive stdin (type commands directly to RTT downlink)")]
+    pub interactive: bool,
+
     #[arg(long, value_name = "PATTERN", help = "Search J-Link device database for PATTERN")]
     pub search_device: Option<String>,
 }
@@ -108,6 +120,10 @@ pub struct AppConfig {
     pub print_config: bool,
     pub init: bool,
     pub stop: bool,
+    pub send: Option<String>,
+    pub send_hex: bool,
+    pub no_newline: bool,
+    pub interactive: bool,
     pub search_device: Option<String>,
 }
 
@@ -246,6 +262,10 @@ impl AppConfig {
             print_config: args.print_config,
             init: args.init,
             stop: args.stop,
+            send: args.send,
+            send_hex: args.hex,
+            no_newline: args.no_newline,
+            interactive: args.interactive,
             search_device: args.search_device,
         })
     }

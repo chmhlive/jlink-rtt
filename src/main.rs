@@ -1,5 +1,6 @@
 mod config;
 mod devices;
+mod downlink;
 mod preflight;
 mod orchestrator;
 
@@ -267,6 +268,9 @@ fn handle_stop(config: &AppConfig) {
         let _ = fs::remove_file(&pid_file);
     }
 
+    let ctrl_file = temp_dir.join("rtt_ctrl.port");
+    let _ = fs::remove_file(&ctrl_file);
+
     // Stop JLinkGDBServer instances associated with these ports
     let pkill_killed = pkill_gdb_server(config);
     
@@ -279,6 +283,104 @@ fn handle_stop(config: &AppConfig) {
         std::process::exit(0);
     } else {
         eprintln!("[WARN] No running RTT session found for this project.");
+        std::process::exit(1);
+    }
+}
+
+async fn handle_send(config: &AppConfig, cmd: &str) {
+    let temp_dir = config::get_project_temp_dir(&config.project_root);
+    let port_file = temp_dir.join("rtt_ctrl.port");
+    if !port_file.is_file() {
+        eprintln!("[ERROR] No running RTT session found to send command.");
+        eprintln!("[INFO] Start an RTT session first with: jlink-rtt --out rtt.log");
+        std::process::exit(1);
+    }
+    let port_str = match fs::read_to_string(&port_file) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            eprintln!("[ERROR] Failed to read control port file {}: {}", port_file.display(), e);
+            std::process::exit(1);
+        }
+    };
+    let port: u16 = match port_str.parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("[ERROR] Invalid port in {}: '{}'.", port_file.display(), port_str);
+            std::process::exit(1);
+        }
+    };
+
+    let payload: Vec<u8> = if config.send_hex {
+        match downlink::parse_hex_string(cmd) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match downlink::unescape_string(cmd) {
+            Ok(mut b) => {
+                if !config.no_newline && !b.ends_with(b"\n") && !b.ends_with(b"\r") {
+                    b.push(b'\n');
+                }
+                b
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    };
+
+    use tokio::io::{AsyncWriteExt, AsyncBufReadExt};
+    use std::time::Duration;
+
+    let connect_future = tokio::net::TcpStream::connect(("127.0.0.1", port));
+    let mut socket = match tokio::time::timeout(Duration::from_secs(2), connect_future).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            let _ = fs::remove_file(&port_file);
+            eprintln!("[ERROR] Failed to connect to RTT session control port {}: {}", port, e);
+            eprintln!("[INFO] The previous RTT session may have terminated. Cleaned stale control port.");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("[ERROR] Timed out connecting to RTT session control port {}.", port);
+            std::process::exit(1);
+        }
+    };
+
+    let len_bytes = (payload.len() as u32).to_be_bytes();
+    if let Err(e) = socket.write_all(&len_bytes).await {
+        eprintln!("[ERROR] Failed to write length to control socket: {}", e);
+        std::process::exit(1);
+    }
+    if let Err(e) = socket.write_all(&payload).await {
+        eprintln!("[ERROR] Failed to write payload to control socket: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut resp = String::new();
+    let mut reader = tokio::io::BufReader::new(socket);
+    let read_future = reader.read_line(&mut resp);
+    match tokio::time::timeout(Duration::from_secs(2), read_future).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            eprintln!("[ERROR] Failed to read response from RTT session: {}", e);
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("[ERROR] Timed out waiting for response from RTT session.");
+            std::process::exit(1);
+        }
+    }
+
+    if resp.starts_with("OK") {
+        eprintln!("[INFO] Downlink command sent ({} bytes).", payload.len());
+        std::process::exit(0);
+    } else {
+        eprintln!("[ERROR] Downlink failed: {}", resp.trim());
         std::process::exit(1);
     }
 }
@@ -299,6 +401,11 @@ async fn main() {
     // Mode dispatch: stop
     if config.stop {
         handle_stop(&config);
+    }
+
+    // Mode dispatch: send
+    if let Some(ref cmd) = config.send {
+        handle_send(&config, cmd).await;
     }
 
     // Mode dispatch: search_device
@@ -418,11 +525,15 @@ async fn main() {
         res = capture_fut => {
             if let Err(e) = res {
                 eprintln!("{}", e);
+                drop(orchestrator);
                 std::process::exit(1);
             }
         }
         _ = signal_fut => {}
     }
+
+    drop(orchestrator);
+    std::process::exit(0);
 }
 
 
