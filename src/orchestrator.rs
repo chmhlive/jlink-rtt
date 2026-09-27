@@ -422,6 +422,10 @@ impl Orchestrator {
             Ok(())
         };
 
+        if let Some(ref mut f) = out_file {
+            let _ = f.sync_data().await;
+        }
+
         result
     }
 }
