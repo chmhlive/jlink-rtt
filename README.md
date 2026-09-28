@@ -22,6 +22,18 @@ The compiled binary will be available at `target/release/jlink-rtt`.
 
 ## Usage
 
+> **BREAKING CHANGE**: `--timeout` now carries the **overall RTT interaction timeout**
+> (keyword match wait limit in match mode, timed capture duration otherwise; `0` or
+> unset = continuous stream). The port ready timeout moved to `--ready-timeout`
+> (config key `RTT_READY_TIMEOUT`, unchanged). `--match-timeout` and the
+> `RTT_MATCH_TIMEOUT` config key have been **removed** — migrate to `--timeout` /
+> `RTT_TIMEOUT`. Invalid (non-numeric or negative) timeout values now fail loudly
+> instead of falling back to an unbounded capture, and `--ready-timeout 0` is now
+> rejected (note the asymmetry: `--timeout 0` stays valid and means an unlimited
+> stream). A timed capture that ends early because the RTT connection closed
+> before the window elapsed also exits **non-zero** (fail-closed): the log may
+> be incomplete.
+
 ### 1. Initialize Project Config
 
 From your target project directory:
@@ -33,8 +45,11 @@ This generates or appends RTT debug settings to `.prj.env`. Adjust the options i
 ### 2. Capture Logs
 
 ```bash
-# Stream output and exit when "START HERE" is captured
-jlink-rtt --match "START HERE" --match-timeout 30
+# Stream output and exit when "START HERE" is captured (waits up to 30s)
+jlink-rtt --match "START HERE" --timeout 30
+
+# Capture logs for 60 seconds, then stop automatically
+jlink-rtt --out rtt.log --timeout 60
 
 # Stream output indefinitely
 jlink-rtt --out rtt.log

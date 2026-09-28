@@ -27,18 +27,20 @@ $PROJECT_TEMP_DIR = Split-Path -Parent (& $JLINK_RTT_BIN --print-config | Select
 $RTT_LOG = Join-Path $PROJECT_TEMP_DIR "rtt.log"
 ```
 
-**Timed capture** — auto-stop after N(+3) seconds, suitable for quick log collection:
+**Timed capture** — auto-stop after N seconds, suitable for quick log collection:
 
 ```bash
-timeout 12 "${JLINK_RTT_BIN}" --out "${RTT_LOG}"   # adjust 12s as needed
+"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --timeout 12   # adjust 12s as needed
 echo "exit=$?"
 echo "log=${RTT_LOG}"
 ```
 
+A non-zero exit here means the capture window did **not** run to completion — the RTT connection closed early (e.g. the target was reset) and the log may be incomplete. Treat it as a capture failure, not a tool error.
+
 **Pattern-triggered capture** — exit when a specific pattern appears in RTT output:
 
 ```bash
-"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --match "Application started" --match-timeout 30
+"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --match "Application started" --timeout 30
 echo "exit=$?"
 echo "log=${RTT_LOG}"
 ```
