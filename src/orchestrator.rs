@@ -4,7 +4,7 @@ use tokio::process::{Child, Command};
 use std::time::Duration;
 use std::net::{TcpStream, ToSocketAddrs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
-use tokio::time::timeout;
+use tokio::time::timeout_at;
 use crate::config::AppConfig;
 use crate::preflight::DetectedTools;
 
@@ -87,7 +87,7 @@ impl Orchestrator {
             Err(e) => return Err(format!("Invalid address {}: {}", addr_str, e)),
         };
 
-        while std::time::Instant::now() < deadline {
+        loop {
             // Check if the server child exited unexpectedly
             if let Some(ref mut child) = self.gdb_server_child {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -99,11 +99,13 @@ impl Orchestrator {
                 }
             }
 
-            // Try to connect to the port
+            // Try to connect to the port; deadline 判定后置保证至少尝试一次
             if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
                 return Ok(());
             }
-
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
@@ -111,7 +113,7 @@ impl Orchestrator {
         Err(format!(
             "[ERROR] Timed out waiting for {} port {}.\n\
              [INFO] Check the JLinkGDBServer log above.\n\
-             [INFO] Or increase the timeout: --timeout 20",
+             [INFO] Or increase the timeout: --ready-timeout 20",
             name, addr_str
         ))
     }
@@ -229,6 +231,29 @@ impl Drop for TaskGuard {
     }
 }
 
+/// 匹配模式读取循环的结局: 命中 / 连接关闭 / 统一超时到点
+enum MatchOutcome {
+    Matched,
+    Closed,
+    TimedOut,
+}
+
+/// 无换行残留缓冲上限: \r 行尾或二进制 RTT 输出永不出现 \n,
+/// 超限整体落盘并清空, 防止缓冲无界增长 (跨边界关键词漏匹配, 与截断同理)
+const MATCH_LINE_BUFFER_MAX: usize = 1024 * 1024;
+
+/// 将一段数据同步写入终端回显与 out 文件; 写入永远完整执行, 不被超时取消
+async fn emit_bytes(data: &[u8], out_file: &mut Option<tokio::fs::File>) -> Result<(), String> {
+    let _ = tokio::io::stdout().write_all(data).await;
+    let _ = tokio::io::stdout().flush().await;
+    if let Some(f) = out_file {
+        f.write_all(data)
+            .await
+            .map_err(|e| format!("Failed to write to out file: {}", e))?;
+    }
+    Ok(())
+}
+
 impl Orchestrator {
     pub async fn run_rtt_capture(&self, config: &AppConfig) -> Result<(), String> {
         let addr_str = format!("{}:{}", config.host, config.rtt_port);
@@ -254,11 +279,19 @@ impl Orchestrator {
             None
         };
 
+        // 统一交互超时: 匹配模式下为关键词等待上限, 纯抓取模式下为定时自退时长;
+        // resolve 阶段已完成数值校验, 缺省(None)表示不限时
+        let unified_timeout: Option<Duration> = config.rtt_timeout.map(Duration::from_secs);
+
         if config.rtt_match_pattern.is_some() {
             eprintln!("[INFO] Connecting to RTT telnet port {}; waiting for match: {}", addr_str, config.rtt_match_pattern.as_ref().unwrap());
         } else {
             eprintln!("[INFO] Connecting to RTT telnet port {}.", addr_str);
-            eprintln!("[INFO] Streaming until interrupted. To stop, send SIGINT (Ctrl+C or kill -INT <pid>).");
+            if let Some(dur) = unified_timeout {
+                eprintln!("[INFO] Streaming for {}s, then stopping automatically.", dur.as_secs());
+            } else {
+                eprintln!("[INFO] Streaming until interrupted. To stop, send SIGINT (Ctrl+C or kill -INT <pid>).");
+            }
         }
 
         let tcp_stream = tokio::net::TcpStream::connect(&addr)
@@ -344,82 +377,168 @@ impl Orchestrator {
             ctrl_port_path: self.ctrl_port_path.clone(),
         };
 
+        // 截止时间只作用于 read 等待 (timeout_at 按剩余时间逐次包裹),
+        // stdout 与 out_file 写入永远完整执行, 避免取消点落在 write_all 上丢失尾部日志
+        let read_deadline = unified_timeout.map(|dur| tokio::time::Instant::now() + dur);
+        let capture_started = std::time::Instant::now();
+
         let has_pattern = config.rtt_match_pattern.is_some();
-        let match_timeout_secs = config.rtt_match_timeout.parse::<u64>().unwrap_or(30);
 
         let result = if has_pattern {
             let pattern = config.rtt_match_pattern.as_ref().unwrap().clone();
+            let pattern_bytes = pattern.as_bytes();
             let mut reader = BufReader::new(read_half);
-            let mut line = String::new();
+            let mut buffer: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 1024];
 
-            let read_future = async {
+            // 手动缓冲 + 按行切分 (对齐 pylib.rtt_stream 的 flush_residual 设计):
+            // read 的取消安全语义保证数据不丢, deadline 只约束单次 read 等待,
+            // 残留无换行尾行 (固件打印关键词后静默的最常见形态) 在到点/断连时统一落盘并复核
+            let match_result = async {
                 loop {
-                    line.clear();
-                    let bytes = reader.read_line(&mut line).await
-                        .map_err(|e| format!("Error reading from RTT: {}", e))?;
-                    if bytes == 0 {
-                        return Ok(false); // Connection closed without match
-                    }
-
-                    // Write to stdout
-                    print!("{}", line);
-                    let _ = tokio::io::stdout().flush().await;
-
-                    // Write to out file
-                    if let Some(ref mut f) = out_file {
-                        if let Err(e) = f.write_all(line.as_bytes()).await {
-                            return Err(format!("Failed to write to out file: {}", e));
+                    // 消化缓冲内全部完整行 (含 \n), 逐行落盘并复核 pattern
+                    while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                        let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+                        emit_bytes(&line_bytes, &mut out_file).await?;
+                        if line_bytes
+                            .windows(pattern_bytes.len())
+                            .any(|w| w == pattern_bytes)
+                        {
+                            // 命中后同批已到达的后续字节 (通常是命中点的上下文日志) 一并落盘
+                            if !buffer.is_empty() {
+                                emit_bytes(&buffer, &mut out_file).await?;
+                            }
+                            return Ok(MatchOutcome::Matched);
                         }
                     }
 
-                    if line.contains(&pattern) {
-                        return Ok(true); // Matched!
+                    // 缓冲已无完整行, 继续读取; deadline 仅约束 read 等待
+                    let read = reader.read(&mut chunk);
+                    let bytes = match read_deadline {
+                        Some(deadline) => match timeout_at(deadline, read).await {
+                            Ok(result) => {
+                                result.map_err(|e| format!("Error reading from RTT: {}", e))?
+                            }
+                            Err(_) => {
+                                if !buffer.is_empty() {
+                                    emit_bytes(&buffer, &mut out_file).await?;
+                                    if buffer
+                                        .windows(pattern_bytes.len())
+                                        .any(|w| w == pattern_bytes)
+                                    {
+                                        return Ok(MatchOutcome::Matched);
+                                    }
+                                }
+                                return Ok(MatchOutcome::TimedOut);
+                            }
+                        },
+                        None => read
+                            .await
+                            .map_err(|e| format!("Error reading from RTT: {}", e))?,
+                    };
+                    if bytes == 0 {
+                        // 连接关闭: 残留无换行尾行同样完整落盘并复核 pattern
+                        if !buffer.is_empty() {
+                            emit_bytes(&buffer, &mut out_file).await?;
+                            if buffer
+                                .windows(pattern_bytes.len())
+                                .any(|w| w == pattern_bytes)
+                            {
+                                return Ok(MatchOutcome::Matched);
+                            }
+                        }
+                        return Ok(MatchOutcome::Closed);
+                    }
+                    buffer.extend_from_slice(&chunk[..bytes]);
+                    if buffer.len() >= MATCH_LINE_BUFFER_MAX {
+                        // 无换行洪流兜底: 落盘时保留尾部 pattern 长度-1 字节,
+                        // 跨切点关键词留待后续 read 补全后仍可整窗命中
+                        let keep = (pattern_bytes.len() - 1).min(buffer.len() - 1);
+                        let tail_start = buffer.len() - keep;
+                        emit_bytes(&buffer[..tail_start], &mut out_file).await?;
+                        if buffer
+                            .windows(pattern_bytes.len())
+                            .any(|w| w == pattern_bytes)
+                        {
+                            // 命中后剩余尾字节照常落盘 (对齐命中后上下文落盘约定)
+                            if keep > 0 {
+                                emit_bytes(&buffer[tail_start..], &mut out_file).await?;
+                            }
+                            return Ok(MatchOutcome::Matched);
+                        }
+                        buffer.drain(..tail_start);
                     }
                 }
             };
 
-            match timeout(Duration::from_secs(match_timeout_secs), read_future).await {
-                Ok(Ok(true)) => {
+            match match_result.await {
+                Ok(MatchOutcome::Matched) => {
                     eprintln!("[INFO] Matched RTT pattern: {}", pattern);
                     Ok(())
                 }
-                Ok(Ok(false)) => {
+                Ok(MatchOutcome::Closed) => {
                     Err("RTT connection closed before pattern was matched.".to_string())
                 }
-                Ok(Err(e)) => Err(e),
-                Err(_) => {
+                Ok(MatchOutcome::TimedOut) => {
+                    let secs = unified_timeout.map(|d| d.as_secs()).unwrap_or(0);
                     let mut err_msg = format!(
                         "[ERROR] Timed out waiting for RTT pattern after {}s: {}\n",
-                        match_timeout_secs, pattern
+                        secs, pattern
                     );
                     err_msg.push_str("[INFO] Check the RTT output above for what was captured.\n");
-                    err_msg.push_str("[INFO] Or extend the timeout: --match-timeout 60\n");
-                    err_msg.push_str("[INFO] Or re-run without --match and without timeout to stream continuously, stop with SIGINT.");
+                    err_msg.push_str("[INFO] Or extend the timeout: --timeout 60\n");
+                    err_msg.push_str(
+                        "[INFO] Or re-run without --match to stream continuously, stop with SIGINT.",
+                    );
                     Err(err_msg)
                 }
+                Err(e) => Err(e),
             }
         } else {
             // Streaming mode: read in blocks and write directly
             let mut reader = read_half;
             let mut buf = [0u8; 1024];
             loop {
-                let bytes = reader.read(&mut buf).await
-                    .map_err(|e| format!("Error reading from RTT: {}", e))?;
+                let read = reader.read(&mut buf);
+                let bytes = match read_deadline {
+                    Some(deadline) => match timeout_at(deadline, read).await {
+                        Ok(result) => {
+                            result.map_err(|e| format!("Error reading from RTT: {}", e))?
+                        }
+                        Err(_) => {
+                            // 抓满统一超时: 计划内正常完成
+                            eprintln!(
+                                "[INFO] RTT capture duration elapsed ({}s); stopping.",
+                                unified_timeout.map(|d| d.as_secs()).unwrap_or(0)
+                            );
+                            break Ok(());
+                        }
+                    },
+                    None => read.await.map_err(|e| format!("Error reading from RTT: {}", e))?,
+                };
                 if bytes == 0 {
-                    break;
-                }
-
-                let chunk = &buf[..bytes];
-                let _ = tokio::io::stdout().write_all(chunk).await;
-                let _ = tokio::io::stdout().flush().await;
-
-                if let Some(ref mut f) = out_file {
-                    if let Err(e) = f.write_all(chunk).await {
-                        return Err(format!("Failed to write to out file: {}", e));
+                    let elapsed = capture_started.elapsed().as_secs();
+                    match unified_timeout {
+                        Some(requested) => {
+                            // 有超时却提前断连: 抓取被截断属异常, fail-closed 报失败
+                            // (单点打印: 错误串伴随 exit 1 由 main 统一输出)
+                            break Err(format!(
+                                "[ERROR] RTT connection closed after {}s of the requested {}s; capture is incomplete.",
+                                elapsed,
+                                requested.as_secs()
+                            ));
+                        }
+                        None => {
+                            eprintln!("[INFO] RTT connection closed; streaming ended.");
+                            break Ok(());
+                        }
                     }
                 }
+
+                if let Err(e) = emit_bytes(&buf[..bytes], &mut out_file).await {
+                    break Err(e);
+                }
             }
-            Ok(())
         };
 
         if let Some(ref mut f) = out_file {
