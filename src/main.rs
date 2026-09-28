@@ -55,7 +55,10 @@ fn print_config(config: &AppConfig) {
     } else {
         println!("RTT_MATCH_PATTERN=");
     }
-    println!("RTT_MATCH_TIMEOUT={}", config.rtt_match_timeout);
+    match config.rtt_timeout {
+        Some(secs) => println!("RTT_TIMEOUT={}", secs),
+        None => println!("RTT_TIMEOUT="),
+    }
     println!("RESET_TARGET={}", config.reset_target);
     println!("RESUME_TARGET={}", config.resume_target);
 }
@@ -162,6 +165,9 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
          RTT_PORT={}\n\n\
          # RTT 服务端口就绪等待超时时间 (单位: 秒)\n\
          RTT_READY_TIMEOUT={}\n\n\
+         # RTT 交互总超时 (单位: 秒); 匹配模式(--match)下为关键词等待上限,\n\
+         # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流\n\
+         # RTT_TIMEOUT=30\n\n\
          # JLinkGDBServer 运行日志保存文件路径\n\
          JLINK_LOG_FILE={}\n\n\
          # J-Link Commander 复位与连接日志保存文件路径\n\
@@ -433,7 +439,7 @@ async fn main() {
         
         let serials = preflight::detect_jlink_serials();
         let mut init_cmd = format!(
-            "{} --init --device <DEVICE> --if {} --speed {} --host {} --gdb-port {} --rtt-port {} --timeout {}",
+            "{} --init --device <DEVICE> --if {} --speed {} --host {} --gdb-port {} --rtt-port {} --ready-timeout {}",
             exe_name, config.jlink_if, config.speed, config.host, config.gdb_port, config.rtt_port, config.ready_timeout
         );
 
@@ -476,7 +482,7 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let timeout_secs = config.ready_timeout.parse::<u32>().unwrap_or(10);
+    let timeout_secs = config.ready_timeout;
 
     // Wait for GDB port ready
     if let Err(e) = orchestrator.wait_for_port(&config.host, &config.gdb_port, "GDB", timeout_secs).await {

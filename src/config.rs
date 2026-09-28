@@ -50,8 +50,11 @@ pub struct CliArgs {
     #[arg(long, value_name = "PORT", help = "RTT telnet port, default: 19021")]
     pub rtt_port: Option<String>,
 
-    #[arg(long, value_name = "SECONDS", help = "Port ready timeout, default: 10")]
+    #[arg(long, value_name = "SECONDS", help = "Overall RTT interaction timeout in seconds (match wait limit in match mode, timed capture duration otherwise; absent/0 = continuous stream)")]
     pub timeout: Option<String>,
+
+    #[arg(long, value_name = "SECONDS", help = "Port ready timeout, default: 10")]
+    pub ready_timeout: Option<String>,
 
     #[arg(long, value_name = "FILE", help = "JLinkGDBServer log file, default: <tmp_dir>/jlink_gdb_server.log")]
     pub log: Option<String>,
@@ -65,7 +68,9 @@ pub struct CliArgs {
     #[arg(long, value_name = "PATTERN", help = "Exit 0 after this fixed text appears in RTT output")]
     pub r#match: Option<String>,
 
-    #[arg(long, value_name = "SEC", help = "Timeout for --match, default: 30")]
+    /// 隐藏兼容参数: 不再承载任何行为, 仅用于拦截旧调用并给出迁移指引,
+    /// 避免 clap 把 --match-timeout 误导性提示为 "similar argument: --match"
+    #[arg(long, hide = true)]
     pub match_timeout: Option<String>,
 
     #[arg(long, help = "Do not reset the target before reading RTT")]
@@ -107,12 +112,12 @@ pub struct AppConfig {
     pub jlink_serial: Option<String>,
     pub gdb_port: String,
     pub rtt_port: String,
-    pub ready_timeout: String,
+    pub ready_timeout: u32,
     pub log_file: String,
     pub gdb_log_file: String,
     pub rtt_out_file: Option<String>,
     pub rtt_match_pattern: Option<String>,
-    pub rtt_match_timeout: String,
+    pub rtt_timeout: Option<u64>,
     pub reset_target: String,  // "0" or "1"
     pub resume_target: String, // "0" or "1"
     
@@ -225,7 +230,21 @@ impl AppConfig {
         let jlink_serial = get_opt_val("JLINK_SERIAL", args.serial);
         let gdb_port = get_val("GDB_PORT", args.gdb_port, "2331");
         let rtt_port = get_val("RTT_PORT", args.rtt_port, "19021");
-        let ready_timeout = get_val("RTT_READY_TIMEOUT", args.timeout, "10");
+        let raw_ready_timeout = get_val("RTT_READY_TIMEOUT", args.ready_timeout, "10");
+        // 就绪等待超时同样在装配阶段校验, 与 RTT_TIMEOUT 的 fail-loud 标准一致;
+        // 空值视为未配置取默认; 0 无意义 (主流程刚 spawn 自己的 GDB Server,
+        // 单次探测必然失败), 与非数字一样直接报错
+        let ready_timeout = match raw_ready_timeout.trim() {
+            "" => 10u32,
+            value => match value.parse::<u32>() {
+                Ok(secs) if secs >= 1 => Ok(secs),
+                _ => Err(format!(
+                    "[ERROR] Invalid --ready-timeout / RTT_READY_TIMEOUT value '{}'. \
+                     It must be a positive integer number of seconds (at least 1).",
+                    value
+                )),
+            }?,
+        };
 
         // Construct dynamic defaults based on the project temp directory
         let default_log = temp_dir.join("jlink_gdb_server.log").to_string_lossy().to_string();
@@ -235,8 +254,59 @@ impl AppConfig {
         let gdb_log_file = get_val("JLINK_GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
         
         let rtt_out_file = get_opt_val("RTT_OUT_FILE", args.out);
-        let rtt_match_pattern = get_opt_val("RTT_MATCH_PATTERN", args.r#match);
-        let rtt_match_timeout = get_val("RTT_MATCH_TIMEOUT", args.match_timeout, "30");
+        // 匹配关键词: 显式 --match "" 在装配阶段报错 (fail-loud, 空 pattern 会使
+        // windows(0) panic 且旧语义"立即命中"毫无意义); env RTT_MATCH_PATTERN 空值
+        // 视作未配置 (模板语义: 留空表示不定时等待)
+        let rtt_match_pattern = match args.r#match {
+            Some(raw) => {
+                if raw.is_empty() {
+                    return Err(
+                        "[ERROR] --match pattern cannot be empty. Omit --match (or leave \
+                         RTT_MATCH_PATTERN unset) for continuous streaming, or provide a \
+                         non-empty keyword."
+                            .to_string(),
+                    );
+                }
+                Some(raw)
+            }
+            None => config_map
+                .get("RTT_MATCH_PATTERN")
+                .cloned()
+                .filter(|v| !v.is_empty()),
+        };
+
+        // 隐藏兼容参数拦截: 显式给出迁移指引而非静默改义或依赖 clap 的误导提示
+        if args.match_timeout.is_some() {
+            return Err(
+                "[ERROR] --match-timeout has been removed. Use --timeout <SECONDS> instead: \
+                 it is the overall RTT interaction timeout (match wait limit in match mode, \
+                 timed capture duration otherwise; 0 or unset = continuous stream)."
+                    .to_string(),
+            );
+        }
+
+        // 统一交互超时: 匹配模式为关键词等待上限, 纯抓取模式为定时自退时长;
+        // 缺省 (env RTT_TIMEOUT 与 --timeout 均未提供, 或值为空) 表示不限时持续流;
+        // 非数字或负数在此直接报错, 严禁静默降级为不限时 (自动化会挂死)
+        let raw_timeout = get_opt_val("RTT_TIMEOUT", args.timeout)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let rtt_timeout = match raw_timeout {
+            None => None,
+            Some(value) => match value.parse::<u64>() {
+                // "0" 与缺省等价, 归一为不限时
+                Ok(0) => None,
+                Ok(secs) => Some(secs),
+                Err(_) => {
+                    return Err(format!(
+                        "[ERROR] Invalid --timeout / RTT_TIMEOUT value '{}'. \
+                         It must be a non-negative integer number of seconds \
+                         (0 or unset = continuous stream).",
+                        value
+                    ));
+                }
+            },
+        };
 
         Ok(AppConfig {
             config_file,
@@ -256,7 +326,7 @@ impl AppConfig {
             gdb_log_file,
             rtt_out_file,
             rtt_match_pattern,
-            rtt_match_timeout,
+            rtt_timeout,
             reset_target,
             resume_target,
             print_config: args.print_config,
