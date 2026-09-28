@@ -239,7 +239,7 @@ enum MatchOutcome {
 }
 
 /// 无换行残留缓冲上限: \r 行尾或二进制 RTT 输出永不出现 \n,
-/// 超限整体落盘并清空, 防止缓冲无界增长 (跨边界关键词漏匹配, 与截断同理)
+/// 超限整体写入文件并清空, 防止缓冲无界增长 (跨边界关键词漏匹配, 与截断同理)
 const MATCH_LINE_BUFFER_MAX: usize = 1024 * 1024;
 
 /// 将一段数据同步写入终端回显与 out 文件; 写入永远完整执行, 不被超时取消
@@ -393,10 +393,10 @@ impl Orchestrator {
 
             // 手动缓冲 + 按行切分 (对齐 pylib.rtt_stream 的 flush_residual 设计):
             // read 的取消安全语义保证数据不丢, deadline 只约束单次 read 等待,
-            // 残留无换行尾行 (固件打印关键词后静默的最常见形态) 在到点/断连时统一落盘并复核
+            // 残留无换行尾行 (固件打印关键词后静默的最常见形态) 在到点/断连时统一写入文件并复核
             let match_result = async {
                 loop {
-                    // 消化缓冲内全部完整行 (含 \n), 逐行落盘并复核 pattern
+                    // 消化缓冲内全部完整行 (含 \n), 逐行写入文件并复核 pattern
                     while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                         let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
                         emit_bytes(&line_bytes, &mut out_file).await?;
@@ -404,7 +404,7 @@ impl Orchestrator {
                             .windows(pattern_bytes.len())
                             .any(|w| w == pattern_bytes)
                         {
-                            // 命中后同批已到达的后续字节 (通常是命中点的上下文日志) 一并落盘
+                            // 命中后同批已到达的后续字节 (通常是命中点的上下文日志) 一并写入文件
                             if !buffer.is_empty() {
                                 emit_bytes(&buffer, &mut out_file).await?;
                             }
@@ -437,7 +437,7 @@ impl Orchestrator {
                             .map_err(|e| format!("Error reading from RTT: {}", e))?,
                     };
                     if bytes == 0 {
-                        // 连接关闭: 残留无换行尾行同样完整落盘并复核 pattern
+                        // 连接关闭: 残留无换行尾行同样完整写入文件并复核 pattern
                         if !buffer.is_empty() {
                             emit_bytes(&buffer, &mut out_file).await?;
                             if buffer
@@ -451,7 +451,7 @@ impl Orchestrator {
                     }
                     buffer.extend_from_slice(&chunk[..bytes]);
                     if buffer.len() >= MATCH_LINE_BUFFER_MAX {
-                        // 无换行洪流兜底: 落盘时保留尾部 pattern 长度-1 字节,
+                        // 无换行连续输出使缓冲到达上限: 写入时保留尾部 pattern 长度-1 字节,
                         // 跨切点关键词留待后续 read 补全后仍可整窗命中
                         let keep = (pattern_bytes.len() - 1).min(buffer.len() - 1);
                         let tail_start = buffer.len() - keep;
@@ -460,7 +460,7 @@ impl Orchestrator {
                             .windows(pattern_bytes.len())
                             .any(|w| w == pattern_bytes)
                         {
-                            // 命中后剩余尾字节照常落盘 (对齐命中后上下文落盘约定)
+                            // 命中后剩余尾字节照常写入文件 (对齐命中后上下文写入约定)
                             if keep > 0 {
                                 emit_bytes(&buffer[tail_start..], &mut out_file).await?;
                             }

@@ -254,9 +254,8 @@ impl AppConfig {
         let gdb_log_file = get_val("JLINK_GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
         
         let rtt_out_file = get_opt_val("RTT_OUT_FILE", args.out);
-        // 匹配关键词: 显式 --match "" 在装配阶段报错 (fail-loud, 空 pattern 会使
-        // windows(0) panic 且旧语义"立即命中"毫无意义); env RTT_MATCH_PATTERN 空值
-        // 视作未配置 (模板语义: 留空表示不定时等待)
+        // 匹配关键词: 显式 --match "" 在装配阶段报错 (空 pattern 使 windows(0) panic);
+        // env RTT_MATCH_PATTERN 空值视作未配置 (模板语义: 留空表示不定时等待)
         let rtt_match_pattern = match args.r#match {
             Some(raw) => {
                 if raw.is_empty() {
@@ -287,7 +286,7 @@ impl AppConfig {
 
         // 统一交互超时: 匹配模式为关键词等待上限, 纯抓取模式为定时自退时长;
         // 缺省 (env RTT_TIMEOUT 与 --timeout 均未提供, 或值为空) 表示不限时持续流;
-        // 非数字或负数在此直接报错, 严禁静默降级为不限时 (自动化会挂死)
+        // 非数字或负数在此直接报错, 严禁静默降级为不限时 (否则自动化无限等待)
         let raw_timeout = get_opt_val("RTT_TIMEOUT", args.timeout)
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
