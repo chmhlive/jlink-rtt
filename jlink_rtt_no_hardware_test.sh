@@ -322,9 +322,10 @@ READY_OUT="${TMP_DIR}/ready_timeout.log"
 grep -Fq 'RTT_READY_TIMEOUT=7' "${READY_OUT}" \
     || fail "--ready-timeout did not override RTT_READY_TIMEOUT."
 
-# --- legacy --match-timeout rejected with explicit migration hint ---
-log_info "Test 1e: Legacy --match-timeout rejected..."
-LEGACY_OUT="${TMP_DIR}/legacy_match_timeout.log"
+# --- --match-timeout sets the match wait limit, overriding --timeout (TODO canonical) ---
+log_info "Test 1e: --match-timeout match wait..."
+MATCH_TIMEOUT_OUT="${TMP_DIR}/match_timeout.log"
+MATCH_TIMEOUT_DATA="${TMP_DIR}/match_timeout_data.log"
 (
     cd "${TMP_DIR}/project/subdir"
     JLINK_RTT_TEST_TMP="${TMP_DIR}" \
@@ -333,11 +334,48 @@ LEGACY_OUT="${TMP_DIR}/legacy_match_timeout.log"
         --project-root "${TMP_DIR}/project" \
         --match "Application started" \
         --match-timeout 3 \
-        > "${LEGACY_OUT}" 2>&1
-) && fail "Legacy --match-timeout should exit non-zero." || true
+        --out "${MATCH_TIMEOUT_DATA}" \
+        > "${MATCH_TIMEOUT_OUT}" 2>&1
+) || fail "--match-timeout capture did not exit 0."
 
-grep -Fq -- '--match-timeout has been removed' "${LEGACY_OUT}" \
-    || fail "Legacy --match-timeout migration hint missing."
+grep -Fq 'Matched RTT pattern: Application started' "${MATCH_TIMEOUT_OUT}" \
+    || fail "--match-timeout match message missing."
+grep -Fq 'Application started' "${MATCH_TIMEOUT_DATA}" \
+    || fail "--match-timeout capture did not save output."
+
+# --- alias --rtt-timeout flows into resolved config ---
+log_info "Test 1e2: --rtt-timeout alias..."
+RTT_ALIAS_OUT="${TMP_DIR}/rtt_timeout_alias.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --match "x" \
+        --rtt-timeout 9 \
+        --print-config \
+        > "${RTT_ALIAS_OUT}" 2>&1
+) || fail "print-config with --rtt-timeout failed."
+
+grep -Fq 'RTT_TIMEOUT=9' "${RTT_ALIAS_OUT}" \
+    || fail "--rtt-timeout alias did not set RTT_TIMEOUT."
+
+# --- invalid --match-timeout value rejected loudly ---
+log_info "Test 1e3: Invalid --match-timeout rejected..."
+BAD_MT_OUT="${TMP_DIR}/bad_match_timeout.log"
+(
+    cd "${TMP_DIR}/project/subdir"
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    "${BINARY_PATH}" \
+        --project-root "${TMP_DIR}/project" \
+        --match "x" \
+        --match-timeout abc \
+        --print-config \
+        > "${BAD_MT_OUT}" 2>&1
+) && fail "Invalid --match-timeout should exit non-zero." || true
+
+grep -Fq "Invalid --match-timeout value 'abc'" "${BAD_MT_OUT}" \
+    || fail "Invalid --match-timeout error message missing."
 
 # --- early disconnect inside the capture window fails closed ---
 pkill -f "python3.*simulate_ports" 2>/dev/null || true

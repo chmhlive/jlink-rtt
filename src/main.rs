@@ -16,6 +16,11 @@ fn print_config(config: &AppConfig) {
     } else {
         println!("CONFIG_FILE=");
     }
+    if let Some(ref file) = config.local_config_file {
+        println!("LOCAL_CONFIG_FILE={}", file.display());
+    } else {
+        println!("LOCAL_CONFIG_FILE=");
+    }
     println!("PROJECT_ROOT={}", config.project_root.display());
     
     if let Some(ref srv) = config.jlink_gdb_server {
@@ -51,14 +56,15 @@ fn print_config(config: &AppConfig) {
         println!("RTT_OUT_FILE=");
     }
     if let Some(ref pattern) = config.rtt_match_pattern {
-        println!("RTT_MATCH_PATTERN={}", pattern);
+        println!("RTT_MATCH={}", pattern);
     } else {
-        println!("RTT_MATCH_PATTERN=");
+        println!("RTT_MATCH=");
     }
     match config.rtt_timeout {
         Some(secs) => println!("RTT_TIMEOUT={}", secs),
         None => println!("RTT_TIMEOUT="),
     }
+    println!("RTT_DELAY={}", config.rtt_delay);
     println!("RESET_TARGET={}", config.reset_target);
     println!("RESUME_TARGET={}", config.resume_target);
 }
@@ -148,7 +154,8 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
         }
     }
 
-    // Prepare RTT config block with Chinese comments
+    // Prepare RTT config block with Chinese comments (aligned with pyt Section 2)
+    // Order mirrors /vhdx/nordic/app/mr01/.prj.env §2: DEVICE/SERIAL/IF/SPEED/PORTS/MATCH/TIMEOUT/DELAY/HOST/READY/LOGS
     let mut block = format!(
         "\n# --- J-Link RTT 调试配置 ---\n\n\
          # J-Link 调试目标芯片型号\n\
@@ -157,17 +164,21 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
          JLINK_IF={}\n\n\
          # J-Link 通信速率 (单位: kHz)\n\
          JLINK_SPEED={}\n\n\
-         # GDB Server 与 RTT 服务监听的主机地址\n\
-         LISTEN_HOST={}\n\n\
          # GDB Server 调试服务端口\n\
          GDB_PORT={}\n\n\
          # RTT Telnet 日志传输端口\n\
          RTT_PORT={}\n\n\
+         # RTT 自动停止匹配关键字 (留空表示超时前持续监听)\n\
+         # RTT_MATCH=\"PROJECT EXECUTION\"\n\n\
+         # RTT 交互总超时 (单位: 秒); 匹配模式(--match)下为关键词等待上限 (可用 --match-timeout 单独覆盖, 缺省 30s),
+         # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流
+         # RTT_TIMEOUT={}\n\n\
+         # RTT 抓取结束后等待 J-Link 释放 USB/串口资源的秒数 (可含小数, 默认 1.5s)\n\
+         RTT_DELAY={}\n\n\
+         # GDB Server 与 RTT 服务监听的主机地址\n\
+         LISTEN_HOST={}\n\n\
          # RTT 服务端口就绪等待超时时间 (单位: 秒)\n\
          RTT_READY_TIMEOUT={}\n\n\
-         # RTT 交互总超时 (单位: 秒); 匹配模式(--match)下为关键词等待上限,\n\
-         # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流\n\
-         # RTT_TIMEOUT=30\n\n\
          # JLinkGDBServer 运行日志保存文件路径\n\
          JLINK_LOG_FILE={}\n\n\
          # J-Link Commander 复位与连接日志保存文件路径\n\
@@ -175,9 +186,11 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
         resolved_device,
         config.jlink_if,
         config.speed,
-        config.host,
         config.gdb_port,
         config.rtt_port,
+        config.rtt_timeout.map(|x| x.to_string()).unwrap_or_else(|| "30".to_string()),
+        config.rtt_delay,
+        config.host,
         config.ready_timeout,
         config.log_file,
         config.gdb_log_file,
@@ -185,6 +198,8 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
 
     if let Some(ref serial) = config.jlink_serial {
         block.push_str(&format!("\n# 目标的 SEGGER J-Link 调试器硬件序列号 (SN)\nJLINK_SERIAL={}\n", serial));
+    } else {
+        block.push_str("\n# 目标调试器硬件序列号 (单设备可保持注释由系统自动探测；多设备并行必须显式指定)\n# JLINK_SERIAL=20161223\n");
     }
 
     if config_path.is_file() {
@@ -487,18 +502,24 @@ async fn main() {
     // Wait for GDB port ready
     if let Err(e) = orchestrator.wait_for_port(&config.host, &config.gdb_port, "GDB", timeout_secs).await {
         eprintln!("{}", e);
+        let delay = orchestrator::Orchestrator::release_delay(&config);
+        orchestrator.shutdown(delay).await;
         std::process::exit(1);
     }
 
     // Reset and resume target
     if let Err(e) = orchestrator.resume_target(&config, &tools).await {
         eprintln!("{}", e);
+        let delay = orchestrator::Orchestrator::release_delay(&config);
+        orchestrator.shutdown(delay).await;
         std::process::exit(1);
     }
 
     // Wait for RTT port ready
     if let Err(e) = orchestrator.wait_for_port(&config.host, &config.rtt_port, "RTT", timeout_secs).await {
         eprintln!("{}", e);
+        let delay = orchestrator::Orchestrator::release_delay(&config);
+        orchestrator.shutdown(delay).await;
         std::process::exit(1);
     }
 
@@ -531,6 +552,8 @@ async fn main() {
         res = capture_fut => {
             if let Err(e) = res {
                 eprintln!("{}", e);
+                let delay = orchestrator::Orchestrator::release_delay(&config);
+                orchestrator.shutdown(delay).await;
                 drop(orchestrator);
                 std::process::exit(1);
             }
@@ -538,6 +561,8 @@ async fn main() {
         _ = signal_fut => {}
     }
 
+    let delay = orchestrator::Orchestrator::release_delay(&config);
+    orchestrator.shutdown(delay).await;
     drop(orchestrator);
     std::process::exit(0);
 }

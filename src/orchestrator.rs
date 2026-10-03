@@ -559,3 +559,24 @@ impl Drop for Orchestrator {
         let _ = fs::remove_file(&self.ctrl_port_path);
     }
 }
+
+impl Orchestrator {
+    /// Graceful shutdown: terminate GDB server, wait for exit, then buffer
+    /// `delay_secs` for OS to reclaim USB handle / TCP ports.
+    pub async fn shutdown(&mut self, delay_secs: f64) {
+        if let Some(mut child) = self.gdb_server_child.take() {
+            eprintln!("[INFO] Stopping JLinkGDBServer.");
+            let _ = child.start_kill();
+            // Wait up to 5s for child exit; ignore timeout (Drop already sent kill).
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        }
+        if delay_secs > 0.0 {
+            eprintln!("[INFO] Waiting {:.1}s for USB/port release (RTT_DELAY={}).", delay_secs, delay_secs);
+            tokio::time::sleep(Duration::from_secs_f64(delay_secs)).await;
+        }
+    }
+
+    pub fn release_delay(config: &AppConfig) -> f64 {
+        config.rtt_delay.parse::<f64>().unwrap_or(1.5)
+    }
+}

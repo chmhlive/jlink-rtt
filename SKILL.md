@@ -40,7 +40,7 @@ A non-zero exit here means the capture window did **not** run to completion — 
 **Pattern-triggered capture** — exit when a specific pattern appears in RTT output:
 
 ```bash
-"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --match "Application started" --timeout 30
+"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --rtt-match "Application started" --rtt-timeout 30 --rtt-delay 1.5
 echo "exit=$?"
 echo "log=${RTT_LOG}"
 ```
@@ -91,8 +91,10 @@ The tool handles all pre-flight checks internally. Its output is self-contained:
 - Use the loaded skill base path directly; do not list the scripts directory to verify it or guess another install path.
 - When the tool exits 0 with `[INFO]` instructions (e.g. no config found), follow the instructions: scan the project for the requested value, ask the user if not found, then run the command it prints.
 - When the tool exits non-zero, read the `[ERROR]` + `[INFO]` lines and relay them to the user as the next action.
+- Multi-probe / local override: if multiple J-Links or a stale serial is suspected, check `--print-config` (`CONFIG_FILE` + `LOCAL_CONFIG_FILE` + `JLINK_SERIAL`). Prefer writing per-machine `JLINK_SERIAL` into `.prj.local.env` (git-ignored), never into shared `.prj.env`.
+- Exit buffering: every capture waits `RTT_DELAY` (default 1.5s) after killing JLinkGDBServer for USB/port release. Do not mistake the trailing `Waiting ... for USB/port release` pause for a hang; back-to-back captures no longer need manual sleep.
 - If `--send` reports "No running RTT session" when no session is active, delete stale `<tmp>/jlink-rtt-*/rtt_ctrl.port`.
-- For all options: `${JLINK_RTT_BIN} --help`
+- For all options: `${JLINK_RTT_BIN} --help` (`--match`/`--rtt-match`, `--match-timeout`/`--rtt-timeout` for match wait, `--timeout` for overall window, `--rtt-delay`/`--delay`; config keys `RTT_MATCH`/`RTT_TIMEOUT`/`RTT_DELAY`, no legacy fallback).
 
 ## Device Name Resolution
 
