@@ -50,7 +50,7 @@ pub struct CliArgs {
     #[arg(long, value_name = "PORT", help = "RTT telnet port, default: 19021")]
     pub rtt_port: Option<String>,
 
-    #[arg(long, value_name = "SECONDS", help = "Overall RTT interaction timeout in seconds (match wait limit in match mode, timed capture duration otherwise; absent/0 = continuous stream)")]
+    #[arg(long = "rtt-timeout", value_name = "SECONDS", help = "Overall RTT interaction timeout in seconds (match wait limit in match mode, timed capture duration otherwise; absent/0 = continuous stream; match mode defaults to 30)")]
     pub timeout: Option<String>,
 
     #[arg(long, value_name = "SECONDS", help = "Port ready timeout, default: 10")]
@@ -65,13 +65,10 @@ pub struct CliArgs {
     #[arg(long, value_name = "FILE", help = "Save RTT output to file while streaming stdout")]
     pub out: Option<String>,
 
-    #[arg(long, visible_alias = "rtt-match", value_name = "PATTERN", help = "Exit 0 after this fixed text appears in RTT output")]
-    pub r#match: Option<String>,
+    #[arg(long = "rtt-match", value_name = "PATTERN", help = "Exit 0 after this fixed text appears in RTT output")]
+    pub rtt_match: Option<String>,
 
-    #[arg(long, visible_alias = "rtt-timeout", value_name = "SEC", help = "Match wait limit in seconds, overrides --timeout in match mode (default: 30)")]
-    pub match_timeout: Option<String>,
-
-    #[arg(long = "rtt-delay", visible_alias = "delay", value_name = "SEC", help = "Delay after session exit for USB/port release, default: 1.5")]
+    #[arg(long = "rtt-delay", value_name = "SEC", help = "Delay after session exit for USB/port release, default: 1.5")]
     pub rtt_delay: Option<f64>,
 
     #[arg(long, help = "Do not reset the target before reading RTT")]
@@ -259,13 +256,13 @@ impl AppConfig {
         let gdb_log_file = get_val("JLINK_GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
         
         let rtt_out_file = get_opt_val("RTT_OUT_FILE", args.out);
-        // 匹配关键词 (TODO 新键 RTT_MATCH, 无旧键兼容): 显式 --match "" 报错;
-        // RTT_MATCH 空值视作未配置 (模板语义: 留空表示持续监听)
-        let rtt_match_pattern = match args.r#match {
+        // 匹配关键词 (RTT_MATCH, 与 pyt 同口径, 无别名无旧键):
+        // 显式 --rtt-match "" 报错; RTT_MATCH 空值视作未配置 (留空表示持续监听)
+        let rtt_match_pattern = match args.rtt_match {
             Some(raw) => {
                 if raw.is_empty() {
                     return Err(
-                        "[ERROR] --match pattern cannot be empty. Omit --match (or leave \
+                        "[ERROR] --rtt-match pattern cannot be empty. Omit --rtt-match (or leave \
                          RTT_MATCH unset) for continuous streaming, or provide a \
                          non-empty keyword."
                             .to_string(),
@@ -279,13 +276,9 @@ impl AppConfig {
                 .filter(|v| !v.is_empty()),
         };
 
-        // 超时 (TODO 为准, 无旧键兼容):
-        // --match-timeout 仅作用于匹配等待, 优先于 --timeout;
-        // --timeout / RTT_TIMEOUT 为统一交互超时 (匹配模式=等待上限, 纯抓取=定时时长);
-        // 匹配模式三者皆无时默认 30s; 0 表示不限时持续流; 非数字直接报错
-        let match_timeout_raw = args.match_timeout
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+        // 统一交互超时 (与 pyt --rtt-timeout 同口径, 无别名无旧键):
+        // --rtt-timeout / RTT_TIMEOUT; 匹配模式=等待上限 (缺省 30s), 纯抓取=定时时长;
+        // 0 表示不限时持续流; 非数字直接报错
         let unified_raw = get_opt_val("RTT_TIMEOUT", args.timeout)
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
@@ -303,14 +296,13 @@ impl AppConfig {
             }
         }
         let rtt_timeout = if rtt_match_pattern.is_some() {
-            match (match_timeout_raw, unified_raw) {
-                (Some(v), _) => parse_timeout_secs(&v, "--match-timeout")?,
-                (None, Some(v)) => parse_timeout_secs(&v, "--timeout / RTT_TIMEOUT")?,
-                (None, None) => Some(30),
+            match unified_raw {
+                Some(v) => parse_timeout_secs(&v, "--rtt-timeout / RTT_TIMEOUT")?,
+                None => Some(30),
             }
         } else {
             match unified_raw {
-                Some(v) => parse_timeout_secs(&v, "--timeout / RTT_TIMEOUT")?,
+                Some(v) => parse_timeout_secs(&v, "--rtt-timeout / RTT_TIMEOUT")?,
                 None => None,
             }
         };

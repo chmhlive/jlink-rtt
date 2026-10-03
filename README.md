@@ -22,18 +22,18 @@ The compiled binary will be available at `target/release/jlink-rtt`.
 
 ## Usage
 
-> **Timeout model**: `--timeout` carries the **overall RTT interaction timeout**
+> **Timeout model**: `--rtt-timeout` carries the **overall RTT interaction timeout**
 > (keyword match wait limit in match mode, timed capture duration otherwise; `0` or
-> unset = continuous stream, except match mode defaults to 30s). `--match-timeout`
-> (alias `--rtt-timeout`) overrides `--timeout` for the match wait only.
+> unset = continuous stream, except match mode defaults to 30s).
 > The port ready timeout is `--ready-timeout` (config key `RTT_READY_TIMEOUT`,
 > default 10). Invalid (non-numeric) timeout values fail loudly instead of
 > falling back to an unbounded capture, and `--ready-timeout 0` is rejected
-> (note the asymmetry: `--timeout 0` stays valid and means an unlimited
+> (note the asymmetry: `--rtt-timeout 0` stays valid and means an unlimited
 > stream). A timed capture that ends early because the RTT connection closed
 > before the window elapsed also exits **non-zero** (fail-closed): the log may
 > be incomplete. Only canonical keys are read: `RTT_MATCH`, `RTT_TIMEOUT`,
-> `RTT_DELAY` (no legacy fallback).
+> `RTT_DELAY`. CLI exposes no aliases: `--rtt-match`, `--rtt-timeout`,
+> `--rtt-delay`, `--ready-timeout` (plus `-i` for `--interactive`).
 
 ### 1. Initialize Project Config
 
@@ -50,7 +50,7 @@ This generates or appends RTT debug settings to `.prj.env`. Adjust the options i
 jlink-rtt --rtt-match "START HERE" --rtt-timeout 30 --rtt-delay 1.5
 
 # Capture logs for 60 seconds, then stop automatically
-jlink-rtt --out rtt.log --timeout 60
+jlink-rtt --out rtt.log --rtt-timeout 60
 
 # Stream output indefinitely
 jlink-rtt --out rtt.log
@@ -88,10 +88,9 @@ Precedence: `CLI args > .prj.local.env (local private, git-ignored) > .prj.env (
 
 | Purpose | Key / CLI | Default |
 |---|---|---|
-| Match pattern | `RTT_MATCH` / `--match` (alias `--rtt-match`) | (none, stream) |
-| Match wait limit | `--match-timeout` (alias `--rtt-timeout`), overrides `--timeout` in match mode | `30` (match mode) |
-| Overall timeout | `RTT_TIMEOUT` / `--timeout` (match wait cap, or stream duration) | `30` (match) / continuous (stream) |
-| Release delay | `RTT_DELAY` / `--rtt-delay` (alias `--delay`) | `1.5` |
+| Match pattern | `RTT_MATCH` / `--rtt-match` | (none, stream) |
+| Overall timeout | `RTT_TIMEOUT` / `--rtt-timeout` (match wait cap, or stream duration) | `30` (match) / continuous (stream) |
+| Release delay | `RTT_DELAY` / `--rtt-delay` | `1.5` |
 | Port ready timeout | `RTT_READY_TIMEOUT` / `--ready-timeout` | `10` |
 | Serial | `JLINK_SERIAL` / `--serial` | auto-detect |
 | GDB/RTT ports | `GDB_PORT`/`RTT_PORT`, `LISTEN_HOST` | `2331`/`19021`/`127.0.0.1` |

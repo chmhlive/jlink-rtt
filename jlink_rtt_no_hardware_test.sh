@@ -251,8 +251,8 @@ log_info "Test 1: Run RTT capture with matching pattern exit..."
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "Application started" \
-        --timeout 3 \
+        --rtt-match "Application started" \
+        --rtt-timeout 3 \
         --out "${OUT_FILE}" \
         > "${OUTPUT_FILE}" 2>&1
 ) && pattern_ok=1 || pattern_ok=0
@@ -267,7 +267,7 @@ grep -Fq -- '-RTTTelnetPort 39021' "${TMP_DIR}/jlink_args" || fail "RTT port arg
 grep -Fq 'r' "${TMP_DIR}/jlink_run_commands" || fail "JLink Commander reset command (r) is missing."
 grep -Fq 'g' "${TMP_DIR}/jlink_run_commands" || fail "JLink Commander go command (g) is missing."
 
-# --- timed capture self-exit (unified --timeout without --match) ---
+# --- timed capture self-exit (unified --rtt-timeout without --match) ---
 pkill -f "python3.*simulate_ports" 2>/dev/null || true
 log_info "Test 1b: Timed capture self-exit..."
 TIMED_OUT_LOG="${TMP_DIR}/timed_output.log"
@@ -277,19 +277,19 @@ TIMED_OUT_LOG="${TMP_DIR}/timed_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --timeout 2 \
+        --rtt-timeout 2 \
         --out "${TIMED_OUT_LOG}" \
         > "${TIMED_OUT_LOG}.stdout" 2>&1
 ) && timed_ok=1 || timed_ok=0
 
-((timed_ok == 1)) || fail "Timed capture did not exit 0 after --timeout elapsed."
+((timed_ok == 1)) || fail "Timed capture did not exit 0 after --rtt-timeout elapsed."
 
 grep -Fq 'RTT capture duration elapsed' "${TIMED_OUT_LOG}.stdout" \
     || fail "Timed capture self-exit message missing."
 grep -Fq 'boot line' "${TIMED_OUT_LOG}" || fail "Timed capture did not save streamed data."
 
-# --- invalid --timeout must fail loudly (no silent unlimited fallback) ---
-log_info "Test 1c: Invalid --timeout value rejected..."
+# --- invalid --rtt-timeout must fail loudly (no silent unlimited fallback) ---
+log_info "Test 1c: Invalid --rtt-timeout value rejected..."
 INVALID_OUT="${TMP_DIR}/invalid_timeout.log"
 (
     cd "${TMP_DIR}/project/subdir"
@@ -297,13 +297,13 @@ INVALID_OUT="${TMP_DIR}/invalid_timeout.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --timeout abc \
+        --rtt-timeout abc \
         --out "${TMP_DIR}/never.log" \
         > "${INVALID_OUT}" 2>&1
-) && fail "Invalid --timeout should exit non-zero." || true
+) && fail "Invalid --rtt-timeout should exit non-zero." || true
 
-grep -Fq "Invalid --timeout / RTT_TIMEOUT value 'abc'" "${INVALID_OUT}" \
-    || fail "Invalid --timeout error message missing."
+grep -Fq "Invalid --rtt-timeout / RTT_TIMEOUT value 'abc'" "${INVALID_OUT}" \
+    || fail "Invalid --rtt-timeout error message missing."
 
 # --- --ready-timeout CLI override flows into resolved config ---
 log_info "Test 1d: --ready-timeout CLI override..."
@@ -322,8 +322,8 @@ READY_OUT="${TMP_DIR}/ready_timeout.log"
 grep -Fq 'RTT_READY_TIMEOUT=7' "${READY_OUT}" \
     || fail "--ready-timeout did not override RTT_READY_TIMEOUT."
 
-# --- --match-timeout sets the match wait limit, overriding --timeout (TODO canonical) ---
-log_info "Test 1e: --match-timeout match wait..."
+# --- --rtt-timeout sets the unified interaction timeout (match wait in match mode) ---
+log_info "Test 1e: --rtt-timeout match wait..."
 MATCH_TIMEOUT_OUT="${TMP_DIR}/match_timeout.log"
 MATCH_TIMEOUT_DATA="${TMP_DIR}/match_timeout_data.log"
 (
@@ -332,50 +332,33 @@ MATCH_TIMEOUT_DATA="${TMP_DIR}/match_timeout_data.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "Application started" \
-        --match-timeout 3 \
+        --rtt-match "Application started" \
+        --rtt-timeout 3 \
         --out "${MATCH_TIMEOUT_DATA}" \
         > "${MATCH_TIMEOUT_OUT}" 2>&1
-) || fail "--match-timeout capture did not exit 0."
+) || fail "--rtt-timeout capture did not exit 0."
 
 grep -Fq 'Matched RTT pattern: Application started' "${MATCH_TIMEOUT_OUT}" \
-    || fail "--match-timeout match message missing."
+    || fail "--rtt-timeout match message missing."
 grep -Fq 'Application started' "${MATCH_TIMEOUT_DATA}" \
-    || fail "--match-timeout capture did not save output."
+    || fail "--rtt-timeout capture did not save output."
 
-# --- alias --rtt-timeout flows into resolved config ---
-log_info "Test 1e2: --rtt-timeout alias..."
-RTT_ALIAS_OUT="${TMP_DIR}/rtt_timeout_alias.log"
-(
-    cd "${TMP_DIR}/project/subdir"
-    PATH="${TMP_DIR}/bin:${PATH}" \
-    "${BINARY_PATH}" \
-        --project-root "${TMP_DIR}/project" \
-        --match "x" \
-        --rtt-timeout 9 \
-        --print-config \
-        > "${RTT_ALIAS_OUT}" 2>&1
-) || fail "print-config with --rtt-timeout failed."
-
-grep -Fq 'RTT_TIMEOUT=9' "${RTT_ALIAS_OUT}" \
-    || fail "--rtt-timeout alias did not set RTT_TIMEOUT."
-
-# --- invalid --match-timeout value rejected loudly ---
-log_info "Test 1e3: Invalid --match-timeout rejected..."
-BAD_MT_OUT="${TMP_DIR}/bad_match_timeout.log"
-(
-    cd "${TMP_DIR}/project/subdir"
-    PATH="${TMP_DIR}/bin:${PATH}" \
-    "${BINARY_PATH}" \
-        --project-root "${TMP_DIR}/project" \
-        --match "x" \
-        --match-timeout abc \
-        --print-config \
-        > "${BAD_MT_OUT}" 2>&1
-) && fail "Invalid --match-timeout should exit non-zero." || true
-
-grep -Fq "Invalid --match-timeout value 'abc'" "${BAD_MT_OUT}" \
-    || fail "Invalid --match-timeout error message missing."
+# --- removed pre-unification flags are rejected (no aliases) ---
+log_info "Test 1e2: Removed flags rejected..."
+for dead in "--match" "--timeout" "--delay" "--match-timeout"; do
+    DEAD_OUT="${TMP_DIR}/dead_flag.log"
+    (
+        cd "${TMP_DIR}/project/subdir"
+        PATH="${TMP_DIR}/bin:${PATH}" \
+        "${BINARY_PATH}" \
+            --project-root "${TMP_DIR}/project" \
+            ${dead} x \
+            --print-config \
+            > "${DEAD_OUT}" 2>&1
+    ) && fail "Removed flag ${dead} should exit non-zero." || true
+    grep -Fq "unexpected argument '${dead}'" "${DEAD_OUT}" \
+        || fail "Removed flag ${dead} did not report unexpected argument."
+done
 
 # --- early disconnect inside the capture window fails closed ---
 pkill -f "python3.*simulate_ports" 2>/dev/null || true
@@ -387,7 +370,7 @@ EARLY_OUT="${TMP_DIR}/early_close.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --timeout 30 \
+        --rtt-timeout 30 \
         --out "${EARLY_OUT}" \
         > "${EARLY_OUT}.stdout" 2>&1
 ) && fail "Early disconnect inside the capture window should exit non-zero." || true
@@ -396,8 +379,8 @@ grep -Fq 'capture is incomplete' "${EARLY_OUT}.stdout" \
     || fail "Early disconnect fail-closed message missing."
 grep -Fq 'boot line' "${EARLY_OUT}" || fail "Early disconnect did not save streamed data."
 
-# --- --timeout 0 normalizes to unset (0 and unset are equivalent) ---
-log_info "Test 1g: --timeout 0 normalizes to continuous stream..."
+# --- --rtt-timeout 0 normalizes to unset (0 and unset are equivalent) ---
+log_info "Test 1g: --rtt-timeout 0 normalizes to continuous stream..."
 ZERO_OUT="${TMP_DIR}/zero_timeout.log"
 (
     cd "${TMP_DIR}/project/subdir"
@@ -405,13 +388,13 @@ ZERO_OUT="${TMP_DIR}/zero_timeout.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --timeout 0 \
+        --rtt-timeout 0 \
         --print-config \
         > "${ZERO_OUT}" 2>&1
-) || fail "print-config with --timeout 0 failed."
+) || fail "print-config with --rtt-timeout 0 failed."
 
 grep -Fxq 'RTT_TIMEOUT=' "${ZERO_OUT}" \
-    || fail "--timeout 0 should normalize to an empty RTT_TIMEOUT line."
+    || fail "--rtt-timeout 0 should normalize to an empty RTT_TIMEOUT line."
 
 # --- residual no-newline tail is matched on deadline ---
 pkill -f "python3.*simulate_ports" 2>/dev/null || true
@@ -425,8 +408,8 @@ RESIDUAL_OUT="${TMP_DIR}/residual_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "RESIDUAL READY" \
-        --timeout 2 \
+        --rtt-match "RESIDUAL READY" \
+        --rtt-timeout 2 \
         --out "${TMP_DIR}/residual_capture.log" \
         > "${RESIDUAL_OUT}" 2>&1
 ) && residual_ok=1 || residual_ok=0
@@ -438,8 +421,8 @@ grep -Fq 'Matched RTT pattern: RESIDUAL READY' "${RESIDUAL_OUT}" \
 grep -Fq 'RESIDUAL READY' "${TMP_DIR}/residual_capture.log" \
     || fail "Residual tail was not saved to out file."
 
-# --- empty --match pattern is rejected at resolve stage ---
-log_info "Test 1i: Empty --match pattern rejected..."
+# --- empty --rtt-match pattern is rejected at resolve stage ---
+log_info "Test 1i: Empty --rtt-match pattern rejected..."
 EMPTY_MATCH_OUT="${TMP_DIR}/empty_match.log"
 (
     cd "${TMP_DIR}/project/subdir"
@@ -447,14 +430,14 @@ EMPTY_MATCH_OUT="${TMP_DIR}/empty_match.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "" \
-        --timeout 3 \
+        --rtt-match "" \
+        --rtt-timeout 3 \
         --out "${TMP_DIR}/never2.log" \
         > "${EMPTY_MATCH_OUT}" 2>&1
-) && fail "Empty --match pattern should exit non-zero." || true
+) && fail "Empty --rtt-match pattern should exit non-zero." || true
 
 grep -Fq 'cannot be empty' "${EMPTY_MATCH_OUT}" \
-    || fail "Empty --match error message missing."
+    || fail "Empty --rtt-match error message missing."
 
 # --- post-match context lines from the same read batch are captured ---
 # 前提: 三行 payload 必须在同一次 read 中到齐 (单次 sendall + loopback 下稳定,
@@ -470,8 +453,8 @@ POSTMATCH_OUT="${TMP_DIR}/postmatch_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "MATCHED" \
-        --timeout 5 \
+        --rtt-match "MATCHED" \
+        --rtt-timeout 5 \
         --out "${TMP_DIR}/postmatch_capture.log" \
         > "${POSTMATCH_OUT}" 2>&1
 ) && postmatch_ok=1 || postmatch_ok=0
@@ -510,8 +493,8 @@ FLOOD_OUT="${TMP_DIR}/flood_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "ZZZNOTPRESENT" \
-        --timeout 20 \
+        --rtt-match "ZZZNOTPRESENT" \
+        --rtt-timeout 20 \
         --out "${TMP_DIR}/flood_capture.log" \
         > "${FLOOD_OUT}" 2>&1
 ) && fail "Flood capture without the pattern should exit non-zero." || true
@@ -539,8 +522,8 @@ STRADDLE_OUT="${TMP_DIR}/straddle_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "${STRADDLE_KEY}" \
-        --timeout 3 \
+        --rtt-match "${STRADDLE_KEY}" \
+        --rtt-timeout 3 \
         --out "${TMP_DIR}/straddle_capture.log" \
         > "${STRADDLE_OUT}" 2>&1
 ) && straddle_ok=1 || straddle_ok=0
@@ -563,8 +546,8 @@ MATCH_TIMEOUT_OUT="${TMP_DIR}/match_timeout_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "NONEXISTENT_PATTERN" \
-        --timeout 2 \
+        --rtt-match "NONEXISTENT_PATTERN" \
+        --rtt-timeout 2 \
         > "${MATCH_TIMEOUT_OUT}" 2>&1
 ) && fail "Pattern-triggered timeout/close should exit non-zero." || true
 
@@ -732,8 +715,8 @@ NO_PROBE_OUT="${TMP_DIR}/no_probe_output.log"
     PATH="${TMP_DIR}/bin:${PATH}" \
     "${BINARY_PATH}" \
         --project-root "${TMP_DIR}/project" \
-        --match "Application started" \
-        --timeout 3 \
+        --rtt-match "Application started" \
+        --rtt-timeout 3 \
         > "${NO_PROBE_OUT}" 2>&1
 )
 

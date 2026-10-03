@@ -486,9 +486,9 @@ impl Orchestrator {
                         secs, pattern
                     );
                     err_msg.push_str("[INFO] Check the RTT output above for what was captured.\n");
-                    err_msg.push_str("[INFO] Or extend the timeout: --timeout 60\n");
+                    err_msg.push_str("[INFO] Or extend the timeout: --rtt-timeout 60\n");
                     err_msg.push_str(
-                        "[INFO] Or re-run without --match to stream continuously, stop with SIGINT.",
+                        "[INFO] Or re-run without --rtt-match to stream continuously, stop with SIGINT.",
                     );
                     Err(err_msg)
                 }

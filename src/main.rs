@@ -170,7 +170,7 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
          RTT_PORT={}\n\n\
          # RTT 自动停止匹配关键字 (留空表示超时前持续监听)\n\
          # RTT_MATCH=\"PROJECT EXECUTION\"\n\n\
-         # RTT 交互总超时 (单位: 秒); 匹配模式(--match)下为关键词等待上限 (可用 --match-timeout 单独覆盖, 缺省 30s),
+         # RTT 交互总超时 (单位: 秒); 匹配模式(--rtt-match)下为关键词等待上限 (缺省 30s),
          # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流
          # RTT_TIMEOUT={}\n\n\
          # RTT 抓取结束后等待 J-Link 释放 USB/串口资源的秒数 (可含小数, 默认 1.5s)\n\

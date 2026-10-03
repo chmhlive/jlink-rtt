@@ -30,7 +30,7 @@ $RTT_LOG = Join-Path $PROJECT_TEMP_DIR "rtt.log"
 **Timed capture** — auto-stop after N seconds, suitable for quick log collection:
 
 ```bash
-"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --timeout 12   # adjust 12s as needed
+"${JLINK_RTT_BIN}" --out "${RTT_LOG}" --rtt-timeout 12   # adjust 12s as needed
 echo "exit=$?"
 echo "log=${RTT_LOG}"
 ```
@@ -94,7 +94,7 @@ The tool handles all pre-flight checks internally. Its output is self-contained:
 - Multi-probe / local override: if multiple J-Links or a stale serial is suspected, check `--print-config` (`CONFIG_FILE` + `LOCAL_CONFIG_FILE` + `JLINK_SERIAL`). Prefer writing per-machine `JLINK_SERIAL` into `.prj.local.env` (git-ignored), never into shared `.prj.env`.
 - Exit buffering: every capture waits `RTT_DELAY` (default 1.5s) after killing JLinkGDBServer for USB/port release. Do not mistake the trailing `Waiting ... for USB/port release` pause for a hang; back-to-back captures no longer need manual sleep.
 - If `--send` reports "No running RTT session" when no session is active, delete stale `<tmp>/jlink-rtt-*/rtt_ctrl.port`.
-- For all options: `${JLINK_RTT_BIN} --help` (`--match`/`--rtt-match`, `--match-timeout`/`--rtt-timeout` for match wait, `--timeout` for overall window, `--rtt-delay`/`--delay`; config keys `RTT_MATCH`/`RTT_TIMEOUT`/`RTT_DELAY`, no legacy fallback).
+- For all options: `${JLINK_RTT_BIN} --help` (canonical flags only, no aliases: `--rtt-match`, `--rtt-timeout`, `--rtt-delay`, `--ready-timeout`; config keys `RTT_MATCH`/`RTT_TIMEOUT`/`RTT_DELAY`).
 
 ## Device Name Resolution
 
