@@ -22,17 +22,17 @@ The compiled binary will be available at `target/release/jlink-rtt`.
 
 ## Usage
 
-> **Timeout model**: `--rtt-timeout` carries the **overall RTT interaction timeout**
+> **Timeout model**: `--log-timeout` carries the **overall RTT interaction timeout**
 > (keyword match wait limit in match mode, timed capture duration otherwise; `0` or
 > unset = continuous stream, except match mode defaults to 30s).
 > The port ready timeout is `--ready-timeout` (config key `RTT_READY_TIMEOUT`,
 > default 10). Invalid (non-numeric) timeout values fail loudly instead of
 > falling back to an unbounded capture, and `--ready-timeout 0` is rejected
-> (note the asymmetry: `--rtt-timeout 0` stays valid and means an unlimited
+> (note the asymmetry: `--log-timeout 0` stays valid and means an unlimited
 > stream). A timed capture that ends early because the RTT connection closed
 > before the window elapsed also exits **non-zero** (fail-closed): the log may
-> be incomplete. Only canonical keys are read: `RTT_MATCH`, `RTT_TIMEOUT`,
-> `RTT_DELAY`. CLI exposes no aliases: `--rtt-match`, `--rtt-timeout`,
+> be incomplete. Only canonical keys are read: `LOG_MATCH`, `LOG_TIMEOUT`,
+> `RTT_DELAY`. CLI exposes no aliases: `--log-match`, `--log-timeout`,
 > `--rtt-delay`, `--ready-timeout` (plus `-i` for `--interactive`).
 
 ### 1. Initialize Project Config
@@ -47,13 +47,13 @@ This generates or appends RTT debug settings to `.prj.env`. Adjust the options i
 
 ```bash
 # Stream output and exit when "START HERE" is captured (waits up to 30s)
-jlink-rtt --rtt-match "START HERE" --rtt-timeout 30 --rtt-delay 1.5
+jlink-rtt --log-match "START HERE" --log-timeout 30 --rtt-delay 1.5
 
 # Capture logs for 60 seconds, then stop automatically
-jlink-rtt --out rtt.log --rtt-timeout 60
+jlink-rtt --log-out rtt.log --log-timeout 60
 
 # Stream output indefinitely
-jlink-rtt --out rtt.log
+jlink-rtt --log-out rtt.log
 
 # Send command to running RTT session via downlink (from another terminal or test script)
 jlink-rtt --send "help"                          # auto-appends \n, supports \n \r \t \\ \xHH
@@ -61,7 +61,7 @@ jlink-rtt --send "status" --no-newline          # send without trailing \n
 jlink-rtt --send "0102030a" --hex               # hex bytes (supports 0102030a, 0x01 0x02, etc.)
 
 # Interactive mode: forward terminal input lines directly to RTT downlink
-jlink-rtt --out rtt.log -i
+jlink-rtt --log-out rtt.log -i
 
 # Stop a running session
 jlink-rtt --stop
@@ -88,8 +88,8 @@ Precedence: `CLI args > .prj.local.env (local private, git-ignored) > .prj.env (
 
 | Purpose | Key / CLI | Default |
 |---|---|---|
-| Match pattern | `RTT_MATCH` / `--rtt-match` | (none, stream) |
-| Overall timeout | `RTT_TIMEOUT` / `--rtt-timeout` (match wait cap, or stream duration) | `30` (match) / continuous (stream) |
+| Match pattern | `LOG_MATCH` / `--log-match` | (none, stream) |
+| Overall timeout | `LOG_TIMEOUT` / `--log-timeout` (match wait cap, or stream duration) | `30` (match) / continuous (stream) |
 | Release delay | `RTT_DELAY` / `--rtt-delay` | `1.5` |
 | Port ready timeout | `RTT_READY_TIMEOUT` / `--ready-timeout` | `10` |
 | Serial | `JLINK_SERIAL` / `--serial` | auto-detect |

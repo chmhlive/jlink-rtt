@@ -50,19 +50,19 @@ fn print_config(config: &AppConfig) {
     println!("RTT_READY_TIMEOUT={}", config.ready_timeout);
     println!("JLINK_LOG_FILE={}", config.log_file);
     println!("JLINK_GDB_LOG_FILE={}", config.gdb_log_file);
-    if let Some(ref out) = config.rtt_out_file {
-        println!("RTT_OUT_FILE={}", out);
+    if let Some(ref out) = config.log_out_file {
+        println!("LOG_OUT_FILE={}", out);
     } else {
-        println!("RTT_OUT_FILE=");
+        println!("LOG_OUT_FILE=");
     }
-    if let Some(ref pattern) = config.rtt_match_pattern {
-        println!("RTT_MATCH={}", pattern);
+    if let Some(ref pattern) = config.log_match {
+        println!("LOG_MATCH={}", pattern);
     } else {
-        println!("RTT_MATCH=");
+        println!("LOG_MATCH=");
     }
-    match config.rtt_timeout {
-        Some(secs) => println!("RTT_TIMEOUT={}", secs),
-        None => println!("RTT_TIMEOUT="),
+    match config.log_timeout {
+        Some(secs) => println!("LOG_TIMEOUT={}", secs),
+        None => println!("LOG_TIMEOUT="),
     }
     println!("RTT_DELAY={}", config.rtt_delay);
     println!("RESET_TARGET={}", config.reset_target);
@@ -169,10 +169,10 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
          # RTT Telnet 日志传输端口\n\
          RTT_PORT={}\n\n\
          # RTT 自动停止匹配关键字 (留空表示超时前持续监听)\n\
-         # RTT_MATCH=\"PROJECT EXECUTION\"\n\n\
-         # RTT 交互总超时 (单位: 秒); 匹配模式(--rtt-match)下为关键词等待上限 (缺省 30s),
+         # LOG_MATCH=\"PROJECT EXECUTION\"\n\n\
+         # RTT 交互总超时 (单位: 秒); 匹配模式(--log-match)下为关键词等待上限 (缺省 30s),
          # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流
-         # RTT_TIMEOUT={}\n\n\
+         # LOG_TIMEOUT={}\n\n\
          # RTT 抓取结束后等待 J-Link 释放 USB/串口资源的秒数 (可含小数, 默认 1.5s)\n\
          RTT_DELAY={}\n\n\
          # GDB Server 与 RTT 服务监听的主机地址\n\
@@ -188,7 +188,7 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
         config.speed,
         config.gdb_port,
         config.rtt_port,
-        config.rtt_timeout.map(|x| x.to_string()).unwrap_or_else(|| "30".to_string()),
+        config.log_timeout.map(|x| x.to_string()).unwrap_or_else(|| "30".to_string()),
         config.rtt_delay,
         config.host,
         config.ready_timeout,
@@ -229,7 +229,7 @@ fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
     println!("[INFO] Config created. Now run the capture command again:");
     let temp_dir = config::get_project_temp_dir(&config.project_root);
     let default_out = temp_dir.join("rtt.log");
-    println!("[INFO]   {} --out {}", exe_name, default_out.display());
+    println!("[INFO]   {} --log-out {}", exe_name, default_out.display());
 
     print_config(&config);
     std::process::exit(0);
@@ -313,7 +313,7 @@ async fn handle_send(config: &AppConfig, cmd: &str) {
     let port_file = temp_dir.join("rtt_ctrl.port");
     if !port_file.is_file() {
         eprintln!("[ERROR] No running RTT session found to send command.");
-        eprintln!("[INFO] Start an RTT session first with: jlink-rtt --out rtt.log");
+        eprintln!("[INFO] Start an RTT session first with: jlink-rtt --log-out rtt.log");
         std::process::exit(1);
     }
     let port_str = match fs::read_to_string(&port_file) {

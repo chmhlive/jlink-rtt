@@ -266,7 +266,7 @@ impl Orchestrator {
         };
 
         // Open out file first if specified, failing fast before establishing network connections or background tasks
-        let mut out_file = if let Some(ref path_str) = config.rtt_out_file {
+        let mut out_file = if let Some(ref path_str) = config.log_out_file {
             let f = tokio::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -281,10 +281,10 @@ impl Orchestrator {
 
         // 统一交互超时: 匹配模式下为关键词等待上限, 纯抓取模式下为定时自退时长;
         // resolve 阶段已完成数值校验, 缺省(None)表示不限时
-        let unified_timeout: Option<Duration> = config.rtt_timeout.map(Duration::from_secs);
+        let unified_timeout: Option<Duration> = config.log_timeout.map(Duration::from_secs);
 
-        if config.rtt_match_pattern.is_some() {
-            eprintln!("[INFO] Connecting to RTT telnet port {}; waiting for match: {}", addr_str, config.rtt_match_pattern.as_ref().unwrap());
+        if config.log_match.is_some() {
+            eprintln!("[INFO] Connecting to RTT telnet port {}; waiting for match: {}", addr_str, config.log_match.as_ref().unwrap());
         } else {
             eprintln!("[INFO] Connecting to RTT telnet port {}.", addr_str);
             if let Some(dur) = unified_timeout {
@@ -382,10 +382,10 @@ impl Orchestrator {
         let read_deadline = unified_timeout.map(|dur| tokio::time::Instant::now() + dur);
         let capture_started = std::time::Instant::now();
 
-        let has_pattern = config.rtt_match_pattern.is_some();
+        let has_pattern = config.log_match.is_some();
 
         let result = if has_pattern {
-            let pattern = config.rtt_match_pattern.as_ref().unwrap().clone();
+            let pattern = config.log_match.as_ref().unwrap().clone();
             let pattern_bytes = pattern.as_bytes();
             let mut reader = BufReader::new(read_half);
             let mut buffer: Vec<u8> = Vec::new();
@@ -486,9 +486,9 @@ impl Orchestrator {
                         secs, pattern
                     );
                     err_msg.push_str("[INFO] Check the RTT output above for what was captured.\n");
-                    err_msg.push_str("[INFO] Or extend the timeout: --rtt-timeout 60\n");
+                    err_msg.push_str("[INFO] Or extend the timeout: --log-timeout 60\n");
                     err_msg.push_str(
-                        "[INFO] Or re-run without --rtt-match to stream continuously, stop with SIGINT.",
+                        "[INFO] Or re-run without --log-match to stream continuously, stop with SIGINT.",
                     );
                     Err(err_msg)
                 }

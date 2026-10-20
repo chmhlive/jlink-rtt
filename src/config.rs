@@ -50,8 +50,8 @@ pub struct CliArgs {
     #[arg(long, value_name = "PORT", help = "RTT telnet port, default: 19021")]
     pub rtt_port: Option<String>,
 
-    #[arg(long = "rtt-timeout", value_name = "SECONDS", help = "Overall RTT interaction timeout in seconds (match wait limit in match mode, timed capture duration otherwise; absent/0 = continuous stream; match mode defaults to 30)")]
-    pub timeout: Option<String>,
+    #[arg(long = "log-timeout", value_name = "SECONDS", help = "Overall RTT interaction timeout in seconds (match wait limit in match mode, timed capture duration otherwise; absent/0 = continuous stream; match mode defaults to 30)")]
+    pub log_timeout: Option<String>,
 
     #[arg(long, value_name = "SECONDS", help = "Port ready timeout, default: 10")]
     pub ready_timeout: Option<String>,
@@ -62,11 +62,11 @@ pub struct CliArgs {
     #[arg(long, value_name = "FILE", help = "GDB resume log file, default: <tmp_dir>/jlink_gdb_resume.log")]
     pub gdb_log: Option<String>,
 
-    #[arg(long, value_name = "FILE", help = "Save RTT output to file while streaming stdout")]
-    pub out: Option<String>,
+    #[arg(long = "log-out", value_name = "FILE", help = "Save RTT output to file while streaming stdout")]
+    pub log_out: Option<String>,
 
-    #[arg(long = "rtt-match", value_name = "PATTERN", help = "Exit 0 after this fixed text appears in RTT output")]
-    pub rtt_match: Option<String>,
+    #[arg(long = "log-match", value_name = "PATTERN", help = "Exit 0 after this fixed text appears in RTT output")]
+    pub log_match: Option<String>,
 
     #[arg(long = "rtt-delay", value_name = "SEC", help = "Delay after session exit for USB/port release, default: 1.5")]
     pub rtt_delay: Option<f64>,
@@ -114,9 +114,9 @@ pub struct AppConfig {
     pub ready_timeout: u32,
     pub log_file: String,
     pub gdb_log_file: String,
-    pub rtt_out_file: Option<String>,
-    pub rtt_match_pattern: Option<String>,
-    pub rtt_timeout: Option<u64>,
+    pub log_out_file: Option<String>,
+    pub log_match: Option<String>,
+    pub log_timeout: Option<u64>,
     pub rtt_delay: String,
     pub reset_target: String,  // "0" or "1"
     pub resume_target: String, // "0" or "1"
@@ -197,7 +197,7 @@ impl AppConfig {
 
         // 4. Build configuration with precedence: CLI > .prj.local.env > .prj.env > Defaults
         // config_map already contains merged overlay, so CLI > merged map > default.
-        // Only canonical TODO keys are read (RTT_MATCH / RTT_TIMEOUT / RTT_DELAY).
+        // Only canonical TODO keys are read (LOG_MATCH / LOG_TIMEOUT / RTT_DELAY).
         let get_val = |key: &str, cli_val: Option<String>, default: &str| -> String {
             cli_val
                 .or_else(|| config_map.get(key).cloned())
@@ -233,7 +233,7 @@ impl AppConfig {
         let gdb_port = get_val("GDB_PORT", args.gdb_port, "2331");
         let rtt_port = get_val("RTT_PORT", args.rtt_port, "19021");
         let raw_ready_timeout = get_val("RTT_READY_TIMEOUT", args.ready_timeout, "10");
-        // 就绪等待超时同样在装配阶段校验, 与 RTT_TIMEOUT 的 fail-loud 标准一致;
+        // 就绪等待超时同样在装配阶段校验, 与 LOG_TIMEOUT 的 fail-loud 标准一致;
         // 空值视为未配置取默认; 0 无意义 (主流程刚 spawn 自己的 GDB Server,
         // 单次探测必然失败), 与非数字一样直接报错
         let ready_timeout = match raw_ready_timeout.trim() {
@@ -255,15 +255,15 @@ impl AppConfig {
         let log_file = get_val("JLINK_LOG_FILE", args.log, &default_log);
         let gdb_log_file = get_val("JLINK_GDB_LOG_FILE", args.gdb_log, &default_gdb_log);
         
-        let rtt_out_file = get_opt_val("RTT_OUT_FILE", args.out);
-        // 匹配关键词 (RTT_MATCH, 与 pyt 同口径, 无别名无旧键):
-        // 显式 --rtt-match "" 报错; RTT_MATCH 空值视作未配置 (留空表示持续监听)
-        let rtt_match_pattern = match args.rtt_match {
+        let log_out_file = get_opt_val("LOG_OUT_FILE", args.log_out);
+        // 匹配关键词 (LOG_MATCH, 与 pyt 同口径, 无别名无旧键):
+        // 显式 --log-match "" 报错; LOG_MATCH 空值视作未配置 (留空表示持续监听)
+        let log_match = match args.log_match {
             Some(raw) => {
                 if raw.is_empty() {
                     return Err(
-                        "[ERROR] --rtt-match pattern cannot be empty. Omit --rtt-match (or leave \
-                         RTT_MATCH unset) for continuous streaming, or provide a \
+                        "[ERROR] --log-match pattern cannot be empty. Omit --log-match (or leave \
+                         LOG_MATCH unset) for continuous streaming, or provide a \
                          non-empty keyword."
                             .to_string(),
                     );
@@ -271,15 +271,15 @@ impl AppConfig {
                 Some(raw)
             }
             None => config_map
-                .get("RTT_MATCH")
+                .get("LOG_MATCH")
                 .cloned()
                 .filter(|v| !v.is_empty()),
         };
 
-        // 统一交互超时 (与 pyt --rtt-timeout 同口径, 无别名无旧键):
-        // --rtt-timeout / RTT_TIMEOUT; 匹配模式=等待上限 (缺省 30s), 纯抓取=定时时长;
+        // 统一交互超时 (与 pyt --log-timeout 同口径, 无别名无旧键):
+        // --log-timeout / LOG_TIMEOUT; 匹配模式=等待上限 (缺省 30s), 纯抓取=定时时长;
         // 0 表示不限时持续流; 非数字直接报错
-        let unified_raw = get_opt_val("RTT_TIMEOUT", args.timeout)
+        let unified_raw = get_opt_val("LOG_TIMEOUT", args.log_timeout)
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
         fn parse_timeout_secs(value: &str, flag: &str) -> Result<Option<u64>, String> {
@@ -295,14 +295,14 @@ impl AppConfig {
                 )),
             }
         }
-        let rtt_timeout = if rtt_match_pattern.is_some() {
+        let log_timeout = if log_match.is_some() {
             match unified_raw {
-                Some(v) => parse_timeout_secs(&v, "--rtt-timeout / RTT_TIMEOUT")?,
+                Some(v) => parse_timeout_secs(&v, "--log-timeout / LOG_TIMEOUT")?,
                 None => Some(30),
             }
         } else {
             match unified_raw {
-                Some(v) => parse_timeout_secs(&v, "--rtt-timeout / RTT_TIMEOUT")?,
+                Some(v) => parse_timeout_secs(&v, "--log-timeout / LOG_TIMEOUT")?,
                 None => None,
             }
         };
@@ -329,9 +329,9 @@ impl AppConfig {
             ready_timeout,
             log_file,
             gdb_log_file,
-            rtt_out_file,
-            rtt_match_pattern,
-            rtt_timeout,
+            log_out_file,
+            log_match,
+            log_timeout,
             rtt_delay,
             reset_target,
             resume_target,
