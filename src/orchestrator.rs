@@ -571,7 +571,7 @@ impl Orchestrator {
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
         if delay_secs > 0.0 {
-            eprintln!("[INFO] Waiting {:.1}s for USB/port release (RTT_DELAY={}).", delay_secs, delay_secs);
+            eprintln!("[INFO] Waiting {:.1}s for USB/port release (--rtt-delay={}).", delay_secs, delay_secs);
             tokio::time::sleep(Duration::from_secs_f64(delay_secs)).await;
         }
     }

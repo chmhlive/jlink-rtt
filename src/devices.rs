@@ -164,36 +164,3 @@ pub fn search_devices(pattern: &str, project_root: &Path) -> Result<Vec<SearchRe
 
     Ok(results)
 }
-
-pub fn resolve_device_name(pattern: &str, project_root: &Path) -> Result<String, String> {
-    let matches = search_devices(pattern, project_root)?;
-    
-    if matches.is_empty() {
-        return Err(format!(
-            "[ERROR] No J-Link device matches '{}'.\n[INFO] Try a broader pattern, e.g. 'nrf52' instead of 'nrf52840'.\n[INFO] Or confirm the exact name: cargo run -- --search-device <pattern>",
-            pattern
-        ));
-    }
-
-    let exact_matches: Vec<&SearchResult> = matches.iter().filter(|m| m.quality == MatchQuality::Exact).collect();
-    
-    if exact_matches.len() == 1 {
-        let resolved = exact_matches[0].device.clone();
-        eprintln!("[INFO] Resolved device: {} ({})", resolved, exact_matches[0].vendor);
-        return Ok(resolved);
-    }
-
-    if matches.len() == 1 {
-        let resolved = matches[0].device.clone();
-        eprintln!("[INFO] Resolved device: {} ({})", resolved, matches[0].vendor);
-        return Ok(resolved);
-    }
-
-    let mut hint = format!("[ERROR] Multiple J-Link devices match '{}' ({} found).\n", pattern, matches.len());
-    hint.push_str("[INFO] Pick the correct device from the list below and re-run with --device <EXACT_NAME>:\n");
-    for m in &matches {
-        hint.push_str(&format!("[INFO]   {} | {}\n", m.vendor, m.device));
-    }
-    hint.push_str("\n[INFO] Example: cargo run -- --init --device <EXACT_NAME>");
-    Err(hint)
-}

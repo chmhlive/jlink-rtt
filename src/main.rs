@@ -7,66 +7,46 @@ mod orchestrator;
 use clap::Parser;
 use config::{CliArgs, AppConfig};
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 fn print_config(config: &AppConfig) {
-    if let Some(ref file) = config.config_file {
-        println!("CONFIG_FILE={}", file.display());
-    } else {
-        println!("CONFIG_FILE=");
-    }
-    if let Some(ref file) = config.local_config_file {
-        println!("LOCAL_CONFIG_FILE={}", file.display());
-    } else {
-        println!("LOCAL_CONFIG_FILE=");
-    }
     println!("PROJECT_ROOT={}", config.project_root.display());
-    
-    if let Some(ref srv) = config.jlink_gdb_server {
-        println!("JLINK_GDB_SERVER={}", srv);
-    }
-    if let Some(ref gdb) = config.gdb {
-        println!("GDB={}", gdb);
-    }
-    if let Some(ref nc) = config.nc {
-        println!("NC={}", nc);
-    }
-    println!("LISTEN_HOST={}", config.host);
-    if let Some(ref dev) = config.device {
-        println!("JLINK_DEVICE={}", dev);
-    } else {
-        println!("JLINK_DEVICE=");
-    }
-    println!("JLINK_IF={}", config.jlink_if);
-    println!("JLINK_SPEED={}", config.speed);
-    if let Some(ref serial) = config.jlink_serial {
-        println!("JLINK_SERIAL={}", serial);
-    } else {
-        println!("JLINK_SERIAL=");
-    }
-    println!("GDB_PORT={}", config.gdb_port);
-    println!("RTT_PORT={}", config.rtt_port);
-    println!("RTT_READY_TIMEOUT={}", config.ready_timeout);
     println!("JLINK_LOG_FILE={}", config.log_file);
     println!("JLINK_GDB_LOG_FILE={}", config.gdb_log_file);
-    if let Some(ref out) = config.log_out_file {
-        println!("LOG_OUT_FILE={}", out);
-    } else {
-        println!("LOG_OUT_FILE=");
-    }
-    if let Some(ref pattern) = config.log_match {
-        println!("LOG_MATCH={}", pattern);
-    } else {
-        println!("LOG_MATCH=");
-    }
-    match config.log_timeout {
-        Some(secs) => println!("LOG_TIMEOUT={}", secs),
-        None => println!("LOG_TIMEOUT="),
-    }
-    println!("RTT_DELAY={}", config.rtt_delay);
-    println!("RESET_TARGET={}", config.reset_target);
-    println!("RESUME_TARGET={}", config.resume_target);
+}
+
+const EXAMPLES: &str = "\
+jlink-rtt usage examples (replace nRF52840_xxAA with your device):
+
+# 1. Find the exact device name
+jlink-rtt --search-device nrf52840
+
+# 2. Timed capture (auto-stop after 60s)
+jlink-rtt --device nRF52840_xxAA --log-out rtt.log --log-timeout 60
+
+# 3. Pattern-triggered capture
+jlink-rtt --device nRF52840_xxAA --log-match \"Application started\" --log-timeout 30
+
+# 4. Continuous stream, then stop from another shell
+jlink-rtt --device nRF52840_xxAA --log-out rtt.log
+jlink-rtt --stop
+
+# 5. Interactive console
+jlink-rtt --device nRF52840_xxAA --log-out rtt.log -i
+
+# 6. Send a command to a running session
+jlink-rtt --send \"help\"
+jlink-rtt --send \"0102030a\" --hex
+
+# 7. Multi-probe / custom ports
+jlink-rtt --device nRF52840_xxAA --serial 000683041131 --gdb-port 2331 --rtt-port 19021
+
+# 8. Show project root and log paths
+jlink-rtt --print-config
+";
+
+fn print_examples() {
+    println!("{}", EXAMPLES.trim_end());
 }
 
 fn handle_search_device(pattern: &str, project_root: &std::path::Path) {
@@ -98,141 +78,6 @@ fn get_current_exe_name() -> String {
                 "./jlink-rtt".to_string()
             }
         })
-}
-
-fn handle_init(mut config: AppConfig, explicit_config_path: Option<String>) {
-    let exe_name = get_current_exe_name();
-    let device_pattern = match config.device.as_ref() {
-        Some(d) => d,
-        None => {
-            eprintln!("[ERROR] DEVICE is required for --init.");
-            eprintln!("[INFO] Scan the project for the DEVICE name (e.g. NRF52840_XXAA).");
-            eprintln!("[INFO] Use --search-device to confirm the exact name:");
-            eprintln!("[INFO]   {} --search-device <pattern>", exe_name);
-            std::process::exit(1);
-        }
-    };
-
-    // Resolve fuzzy device name
-    let resolved_device = match devices::resolve_device_name(device_pattern, &config.project_root) {
-        Ok(name) => name,
-        Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
-    };
-    config.device = Some(resolved_device.clone());
-
-    // Determine target config path
-    let config_path = match explicit_config_path {
-        Some(path) => PathBuf::from(path),
-        None => config.project_root.join(".prj.env"),
-    };
-
-    // Auto-detect J-Link serial if not explicitly set
-    if config.jlink_serial.is_none() {
-        let serials = preflight::detect_jlink_serials();
-        if serials.len() == 1 {
-            config.jlink_serial = Some(serials[0].clone());
-        }
-    }
-
-    // Check if config file exists and already has JLINK_DEVICE
-    if config_path.is_file() {
-        if let Ok(existing_content) = fs::read_to_string(&config_path) {
-            let has_jlink_device = existing_content.lines().any(|l| {
-                let trimmed = l.trim();
-                trimmed.starts_with("JLINK_DEVICE=") || trimmed.starts_with("DEVICE=")
-            });
-            if has_jlink_device {
-                eprintln!("[ERROR] Config file already exists: {}", config_path.display());
-                eprintln!("[INFO] To inspect it, run:");
-                eprintln!("[INFO]   {} --print-config", exe_name);
-                eprintln!("[INFO] To re-create, remove the file first: rm {}", config_path.display());
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // Prepare RTT config block with Chinese comments (aligned with pyt Section 2)
-    // Order mirrors /vhdx/nordic/app/mr01/.prj.env §2: DEVICE/SERIAL/IF/SPEED/PORTS/MATCH/TIMEOUT/DELAY/HOST/READY/LOGS
-    let mut block = format!(
-        "\n# --- J-Link RTT 调试配置 ---\n\n\
-         # J-Link 调试目标芯片型号\n\
-         JLINK_DEVICE={}\n\n\
-         # J-Link 调试通信接口 (例如: SWD, JTAG)\n\
-         JLINK_IF={}\n\n\
-         # J-Link 通信速率 (单位: kHz)\n\
-         JLINK_SPEED={}\n\n\
-         # GDB Server 调试服务端口\n\
-         GDB_PORT={}\n\n\
-         # RTT Telnet 日志传输端口\n\
-         RTT_PORT={}\n\n\
-         # RTT 自动停止匹配关键字 (留空表示超时前持续监听)\n\
-         # LOG_MATCH=\"PROJECT EXECUTION\"\n\n\
-         # RTT 交互总超时 (单位: 秒); 匹配模式(--log-match)下为关键词等待上限 (缺省 30s),
-         # 纯抓取模式下抓满该时长自动退出; 缺省或 0 表示持续流
-         # LOG_TIMEOUT={}\n\n\
-         # RTT 抓取结束后等待 J-Link 释放 USB/串口资源的秒数 (可含小数, 默认 1.5s)\n\
-         RTT_DELAY={}\n\n\
-         # GDB Server 与 RTT 服务监听的主机地址\n\
-         LISTEN_HOST={}\n\n\
-         # RTT 服务端口就绪等待超时时间 (单位: 秒)\n\
-         RTT_READY_TIMEOUT={}\n\n\
-         # JLinkGDBServer 运行日志保存文件路径\n\
-         JLINK_LOG_FILE={}\n\n\
-         # J-Link Commander 复位与连接日志保存文件路径\n\
-         JLINK_GDB_LOG_FILE={}\n",
-        resolved_device,
-        config.jlink_if,
-        config.speed,
-        config.gdb_port,
-        config.rtt_port,
-        config.log_timeout.map(|x| x.to_string()).unwrap_or_else(|| "30".to_string()),
-        config.rtt_delay,
-        config.host,
-        config.ready_timeout,
-        config.log_file,
-        config.gdb_log_file,
-    );
-
-    if let Some(ref serial) = config.jlink_serial {
-        block.push_str(&format!("\n# 目标的 SEGGER J-Link 调试器硬件序列号 (SN)\nJLINK_SERIAL={}\n", serial));
-    } else {
-        block.push_str("\n# 目标调试器硬件序列号 (单设备可保持注释由系统自动探测；多设备并行必须显式指定)\n# JLINK_SERIAL=20161223\n");
-    }
-
-    if config_path.is_file() {
-        use std::io::Write;
-        let mut file = match fs::OpenOptions::new().append(true).open(&config_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("[ERROR] Failed to open config file for appending: {}", e);
-                std::process::exit(1);
-            }
-        };
-        if let Err(e) = file.write_all(block.as_bytes()) {
-            eprintln!("[ERROR] Failed to append config to file: {}", e);
-            std::process::exit(1);
-        }
-        println!("[INFO] Appended config to: {}", config_path.display());
-    } else {
-        let content = block.trim_start_matches('\n').to_string();
-        if let Err(e) = fs::write(&config_path, content) {
-            eprintln!("[ERROR] Failed to write config file: {}", e);
-            std::process::exit(1);
-        }
-        println!("[INFO] Created config: {}", config_path.display());
-    }
-
-    config.config_file = Some(config_path.clone());
-    println!("[INFO] Config created. Now run the capture command again:");
-    let temp_dir = config::get_project_temp_dir(&config.project_root);
-    let default_out = temp_dir.join("rtt.log");
-    println!("[INFO]   {} --log-out {}", exe_name, default_out.display());
-
-    print_config(&config);
-    std::process::exit(0);
 }
 
 #[cfg(unix)]
@@ -409,8 +254,12 @@ async fn handle_send(config: &AppConfig, cmd: &str) {
 #[tokio::main]
 async fn main() {
     let args = CliArgs::parse();
-    let explicit_config = args.config.clone();
-    
+
+    if args.example {
+        print_examples();
+        std::process::exit(0);
+    }
+
     let config = match AppConfig::resolve(args) {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -434,11 +283,6 @@ async fn main() {
         handle_search_device(pattern, &config.project_root);
     }
 
-    // Mode dispatch: init
-    if config.init {
-        handle_init(config.clone(), explicit_config);
-    }
-    
     if config.print_config {
         print_config(&config);
         std::process::exit(0);
@@ -447,30 +291,30 @@ async fn main() {
     // Normal capture mode check: if DEVICE is missing
     if config.device.is_none() {
         let exe_name = get_current_exe_name();
-        println!("[INFO] No .prj.env found and no --device given.");
+        println!("[INFO] No --device given.");
         println!("[INFO] Scan the project for the DEVICE name (e.g. NRF52840_XXAA).");
         println!("[INFO] Use --search-device to confirm the exact name:");
-        println!("[INFO]   {} --search-device <pattern>", exe_name);
-        
+        println!("[INFO]   {} --search-device PATTERN", exe_name);
+
         let serials = preflight::detect_jlink_serials();
-        let mut init_cmd = format!(
-            "{} --init --device <DEVICE> --if {} --speed {} --host {} --gdb-port {} --rtt-port {} --ready-timeout {}",
+        let mut capture_cmd = format!(
+            "{} --device DEVICE_NAME --if {} --speed {} --host {} --gdb-port {} --rtt-port {} --ready-timeout {}",
             exe_name, config.jlink_if, config.speed, config.host, config.gdb_port, config.rtt_port, config.ready_timeout
         );
 
         if serials.len() == 1 {
-            init_cmd.push_str(&format!(" --serial {}", serials[0]));
+            capture_cmd.push_str(&format!(" --serial {}", serials[0]));
         } else if serials.len() > 1 {
             println!("[INFO] Multiple J-Link probes detected. Ask the user which serial to use.");
             println!("[INFO] Available serials:");
             for s in &serials {
                 println!("[INFO]   {}", s);
             }
-            init_cmd.push_str(" --serial <SERIAL>");
+            capture_cmd.push_str(" --serial SERIAL_NUMBER");
         }
 
         println!("[INFO] Then run:");
-        println!("[INFO]   {}", init_cmd);
+        println!("[INFO]   {}", capture_cmd);
         println!("[INFO] Review all parameters above before executing. If the project uses a different interface (e.g. JTAG), adjust --if.");
         std::process::exit(0);
     }
